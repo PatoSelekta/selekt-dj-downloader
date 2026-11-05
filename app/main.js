@@ -2006,18 +2006,19 @@ function planEncode({ audioFormat, bitrate, loudnorm, sourceAcodec, sourceAbr })
   const srcFam = codecFamily(sourceAcodec);
   const tgtFam = formatFamily(audioFormat);
   const lossless = audioFormat === "wav" || audioFormat === "flac";
-  const abr = Number(sourceAbr) || 0;
+  const abrKnown = sourceAbr != null && Number(sourceAbr) > 0;
+  const abr = abrKnown ? Number(sourceAbr) : 0;
   let mode = "convert";
   if (!loudnorm && srcFam && srcFam === tgtFam) {
-    if (lossless) mode = "copy";
-    else if (abr >= targetBitrate) mode = "copy";
+    // Unknown bitrate: do not claim convert-to-target. Matching codec + Normalize off → preserve source.
+    if (lossless || !abrKnown || abr >= targetBitrate) mode = "copy";
   }
-  const upsampleWarn = mode === "convert" && !loudnorm && !!srcFam && srcFam === tgtFam && !lossless && abr > 0 && abr < targetBitrate;
+  const upsampleWarn = mode === "convert" && !loudnorm && !!srcFam && srcFam === tgtFam && !lossless && abrKnown && abr < targetBitrate;
   return {
     mode,
     upsampleWarn,
     sourceAcodec: sourceAcodec || null,
-    sourceAbr: sourceAbr == null ? null : sourceAbr,
+    sourceAbr: abrKnown ? sourceAbr : null,
     targetFormat,
     targetBitrate,
   };
@@ -2207,7 +2208,13 @@ async function handleDownload(opts) {
 
     files.forEach(f => recordHistory({
       action: type, url, title: path.basename(f), folder: path.dirname(f), file: f,
-      details: wantAudio ? `${audioFormat} ${bitrate}kbps` : (noConvert ? "original" : `quality=${quality}`),
+      details: wantAudio
+        ? (encodePlan && encodePlan.mode === "copy"
+            ? (encodePlan.sourceAbr != null
+                ? `${audioFormat} source ~${Math.round(Number(encodePlan.sourceAbr))} kbps preserved`
+                : `${audioFormat} source preserved`)
+            : `${audioFormat} ${bitrate}kbps`)
+        : (noConvert ? "original" : `quality=${quality}`),
     }));
 
     // Record id→file for dedup (single downloads only — playlists skip dup-check).

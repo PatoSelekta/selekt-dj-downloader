@@ -422,7 +422,7 @@ test("get-settings does not write audio_format into an empty config", ...);
 
 **Interfaces:**
 - `planEncode({ audioFormat, bitrate, loudnorm, sourceAcodec, sourceAbr })` → `{ mode: "copy"|"convert", upsampleWarn: boolean, sourceAcodec, sourceAbr, targetFormat, targetBitrate }`
-- `mode === "copy"` iff: audio request, loudnorm off, codec family matches format (`mp3`/`mp3`; `m4a`/`aac`; `wav`/`pcm`; `flac`/`flac`), and `sourceAbr >= bitrate` (lossless ignore bitrate, always copy if codec matches).
+- `mode === "copy"` iff: audio request, loudnorm off, codec family matches format (`mp3`/`mp3`; `m4a`/`aac`; `wav`/`pcm`; `flac`/`flac`), and (lossless **or** `sourceAbr` unknown **or** `sourceAbr >= bitrate`). Unknown bitrate must not be treated as 0 (that falsely planned `convert` to the requested kbps while yt-dlp still copied).
 - Download: if copy, do **not** pass `--audio-quality ${bitrate}K`. Still `-x --audio-format`. If convert, keep today's args.
 - Result includes `encodePlan`. Queue runner will persist it on the item (Task 8).
 - Normalize on → always `convert`.

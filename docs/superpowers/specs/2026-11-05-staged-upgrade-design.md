@@ -4,7 +4,7 @@
 
 **Source verified:** git `b4b8283` = `origin/main` at design time. App version `1.1.0`, Electron `^44.10.2` (lockfile 44.10.2). Installed Mac app is **not** on this Linux VM and was **not** re-tested (user Mac offline).
 
-**This-VM checks (2026-11-05, after Phase 1):** `uname -m` = `x86_64`; Node `v22.23.4`; `node --test --test-concurrency=1 app/test/*.test.js` → **228/228 pass**. Electron is not installed in this workspace (`app/node_modules` absent), so `app/test-browser/a11y-check.electron.js` and any `electron-builder` packaging were **not** run. ffmpeg 6.1.1 present; one generated 1 s sine measured for loudnorm JSON parseability. No copyrighted media and no user cookies.
+**This-VM checks (2026-11-05, after Phase 1):** `uname -m` = `x86_64`; Node `v22.23.4`; `node --test --test-concurrency=1 app/test/*.test.js` → **231/231 pass**. Electron is not installed in this workspace (`app/node_modules` absent), so `app/test-browser/a11y-check.electron.js` and any `electron-builder` packaging were **not** run. ffmpeg 6.1.1 present; one generated 1 s sine measured for loudnorm JSON parseability. No copyrighted media and no user cookies.
 
 ---
 
@@ -168,8 +168,9 @@ audio_format, audio_bitrate     // Phase 1: persist last Download-tab choice aft
 ### 5.4 Encode policy (Phase 1 default — needs approval)
 
 - If Normalize is **on**: convert (loudnorm cannot stream-copy).
-- If Normalize is **off** and ffprobe/source container+codec already match the chosen format, and source bitrate ≥ chosen bitrate: **copy** (no second lossy generation).
-- If chosen bitrate **>** detected source bitrate: still convert if the user picked a different container; **warn** (MP3/M4A as well as WAV/FLAC) that quality cannot increase.
+- If Normalize is **off** and source codec family already matches the chosen format, and source bitrate ≥ chosen bitrate: **copy** (no second lossy generation).
+- If codec matches but **source bitrate is unknown**: **copy**, persist `sourceAbr: null`, do not pass `--audio-quality`, do not write History as `{format} {requested}kbps`. Treating unknown as 0 falsely planned `convert` to 320 while yt-dlp still copied the source file.
+- If chosen bitrate **>** a **known** source bitrate: convert and **warn** (MP3/M4A as well as WAV/FLAC) that quality cannot increase.
 - Video Original remux path unchanged.
 
 ### 5.5 Loudnorm gate (Phase 1)

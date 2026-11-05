@@ -98,7 +98,7 @@ Run the unit tests with:
 node --test app/test/*.test.js
 ```
 
-Latest Linux run (this Phase 1 pass): **228 of 228 passed** (Node 22.23.4, sequential). That count includes
+Latest Linux run (this Phase 1 pass): **231 of 231 passed** (Node 22.23.4, sequential). That count includes
 the older normalization / destination tests plus Phase 1 reliability and audio-safety tests. An earlier Mac
 run of the pre-Phase-1 suite was 193/193 (macOS 27.0.1, Apple silicon, Node 26.11.1). One test file needs
 Node 20.4 or newer. These tests use stand-ins for yt-dlp and Electron, so they do not prove that real downloads
@@ -109,7 +109,7 @@ gate. Mac packaging/runtime was **not** re-tested (user Mac offline). See the
 **Phase 1 (reliability / audio safety)** is implemented on this branch: atomic `queue.json` / `config.json`,
 actionable `errorCode` plus visible cookie/engine retries, SHA-256-verified yt-dlp with `.bak` rollback,
 `dest_unmounted` for disconnected favorites, remembered format/bitrate after you change them, copy-when-source
-matches, loudnorm I/TP gate (keep −9 LUFS, no limiter), and a main-owned sequential queue. Fingerprint stays
+matches (unknown source bitrate is copied and not reported as the requested kbps), loudnorm I/TP gate (keep −9 LUFS, no limiter), and a main-owned sequential queue. Fingerprint stays
 flag-only. Intel, signing, presets and UI redesign are **not** in this phase.
 
 **Latest Mac smoke test (a spot check, not a full test).** On the review Mac (Apple silicon) the app was started with a new,

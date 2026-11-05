@@ -95,3 +95,86 @@ test("renderer quality confirm covers lossy as well as lossless", () => {
   assert.match(src, /quality_warn/);
   assert.match(src, /val === "mp3" \|\| val === "m4a"/);
 });
+
+// Direct-media MP3 (yt-dlp -J has acodec, no abr): requested 320 must not claim convert-to-320.
+const DIRECT_MP3 = "PRESERVED-192KBPS-BODY";
+function directMp3Script() {
+  return (cmd, args) => {
+    if (cmd.endsWith("ffmpeg")) {
+      if (args.includes("null")) return { code: 0, stderr: '{"input_i":"-20","input_tp":"-3","input_lra":"5","input_thresh":"-30","target_offset":"0"}' };
+      return { code: 0 };
+    }
+    if (args.includes("-J")) {
+      return { code: 0, stdout: JSON.stringify({
+        id: "direct1", title: "direct", ext: "mp3", acodec: "mp3", vcodec: "none",
+        formats: [{ acodec: "mp3", vcodec: "none", ext: "mp3" }],
+      }) };
+    }
+    const o = args.indexOf("-o");
+    if (o >= 0) {
+      const dir = path.dirname(args[o + 1]);
+      fs.mkdirSync(dir, { recursive: true });
+      const f = path.join(dir, "direct.mp3");
+      fs.writeFileSync(f, DIRECT_MP3);
+      return { code: 0, stdout: f + "\n" };
+    }
+    return { code: 0 };
+  };
+}
+
+test("unknown sourceAbr + matching mp3 + Normalize off: copy, no --audio-quality, file bytes preserved, no 320 claim", T, async () => {
+  const h = makeHarness({ config: { prevent_duplicates: false, loudnorm: false, auto_tag: false } });
+  try {
+    h.setScript(directMp3Script());
+    const r = await dl(h, { loudnorm: false, bitrate: "320" });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.encodePlan.mode, "copy");
+    assert.equal(r.encodePlan.sourceAcodec, "mp3");
+    assert.equal(r.encodePlan.sourceAbr, null);
+    assert.equal(r.encodePlan.targetBitrate, 320);
+    assert.equal(r.encodePlan.upsampleWarn, false);
+    assert.equal(ytAudioArgs(h).includes("--audio-quality"), false);
+    assert.equal(h.spawns.some((s) => s.cmd.endsWith("ffmpeg") && s.args.includes("libmp3lame")), false);
+    assert.equal(fs.readFileSync(r.files[0], "utf8"), DIRECT_MP3);
+    const hist = fs.readFileSync(h.p("download_history.jsonl"), "utf8");
+    assert.equal(hist.includes("320kbps"), false, "history must not claim the requested bitrate when the source was preserved");
+    assert.match(hist, /source preserved/);
+  } finally { h.close(); }
+});
+
+test("production queue-start: unknown abr matching mp3 persists copy plan and keeps output bytes", T, async () => {
+  const h = makeHarness({ config: { prevent_duplicates: false, loudnorm: false, auto_tag: false } });
+  try {
+    h.setScript(directMp3Script());
+    await h.invoke("queue-set", [{
+      id: "q-direct", url: "https://example.com/direct.mp3", status: "pending",
+      format: "audio:mp3", bitrate: "320", loudnorm: false, autoTag: false, destId: "",
+    }]);
+    await h.invoke("queue-start");
+    const end = Date.now() + 8000;
+    while (Date.now() < end) {
+      const st = await h.invoke("queue-status");
+      if (!st.running) break;
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    const [item] = await h.invoke("queue-get");
+    assert.equal(item.status, "done");
+    assert.equal(item.encodePlan.mode, "copy");
+    assert.equal(item.encodePlan.sourceAbr, null);
+    assert.equal(item.encodePlan.upsampleWarn, false);
+    assert.equal(ytAudioArgs(h).includes("--audio-quality"), false);
+    assert.equal(fs.readFileSync(item.files[0], "utf8"), DIRECT_MP3);
+  } finally { h.close(); }
+});
+
+test("unknown sourceAbr + matching mp3 + Normalize on: still convert (loudnorm cannot copy)", T, async () => {
+  const h = makeHarness({ config: { prevent_duplicates: false, auto_tag: false } });
+  try {
+    h.setScript(directMp3Script());
+    const r = await dl(h, { loudnorm: true, lufs: -14, bitrate: "320" });
+    assert.equal(r.ok, true);
+    assert.equal(r.encodePlan.mode, "convert");
+    assert.equal(r.encodePlan.sourceAbr, null);
+    assert.equal(ytAudioArgs(h).includes("--audio-quality"), true);
+  } finally { h.close(); }
+});

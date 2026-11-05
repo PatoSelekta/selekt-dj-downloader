@@ -294,9 +294,14 @@ a further generation of loss. Check the *Source: ~N kbps* line on the preview ca
 If you choose **WAV, FLAC, MP3 or M4A** and the detected source bitrate is below the quality you picked, the app
 asks you to confirm first. **[Unit-tested]**.
 
-When **Normalize is off** and the source is already the format and bitrate you asked for (or a lossless match),
-the app **copies** that audio instead of converting it again. Normalize on, or a different container/codec, still
-converts. **[Unit-tested]**; a real copy-vs-convert download **[Not tested]** on a Mac in this pass.
+When **Normalize is off** and the source is already the format you asked for (lossless, or lossy at or above the
+chosen bitrate), the app **copies** that audio instead of converting it again. If the source codec matches but
+its bitrate is **unknown** (common for a direct media file), it also copies and does **not** claim the requested
+bitrate — History says *source preserved*, and `encodePlan.sourceAbr` stays null. Normalize on, a different
+container/codec, or a *known* lower source bitrate still converts (with an upsample warning when quality cannot
+increase). **[Unit-tested]** on the production download and queue-start path. A Mac real-engine run of the
+previous build preserved a 192 kbps MP3 while reporting `convert`/320; that reporting bug is fixed here. The
+fix itself was not re-run on a Mac in this pass.
 
 ### The four switches
 
@@ -777,7 +782,7 @@ in development runs. This is a release note for the maintainers, not something y
 | Latest smoke test: the same tone downloaded through the app window with the defaults (MP3 320 kbps, Normalize on at −14 LUFS) in a new isolated data folder; output measured −14.0 LUFS; no *not normalized* warning. One mono tone; ffmpeg 6.0 and the other engine files copied from an earlier review folder, not a verified fresh install; not listened to; not opened in Apple Music | **[Observed]**; see [Latest Mac smoke test](#latest-mac-smoke-test) |
 | Starting that download: Enter in the link box submitted it; two background (accessibility) presses of the Download button queued nothing, cause unconfirmed. A real mouse click on Download | Enter **[Observed]**; the button press **[Observed]** not to register; its cause and a real click **[Not tested]** |
 | Layout and accessibility checks of the window | Ran in real Electron against a **stub** backend |
-| Unit tests: **228 of 228 passing** in this Linux pass (Node 22.23.4, sequential). Includes Phase 1 reliability/audio-safety tests (atomic persist, errors/retries, engine SHA-256, dest_unmounted, remembered format, copy-or-convert, loudnorm I/TP gate, main-owned queue). An earlier Mac run of the pre-Phase-1 suite was 193/193. | **[Unit-tested]**: stand-ins for Electron, yt-dlp, network and binaries. One generated 1 s sine was measured with real ffmpeg 6.1.1 on Linux for loudnorm JSON parseability. No copyrighted media and no user cookies. Mac packaging/runtime **[Not tested]** in this pass |
+| Unit tests: **231 of 231 passing** in this Linux pass (Node 22.23.4, sequential). Includes Phase 1 reliability/audio-safety tests (atomic persist, errors/retries, engine SHA-256, dest_unmounted, remembered format, copy-or-convert including unknown source bitrate, loudnorm I/TP gate, main-owned queue). An earlier Mac run of the pre-Phase-1 suite was 193/193. | **[Unit-tested]**: stand-ins for Electron, yt-dlp, network and binaries. One generated 1 s sine was measured with real ffmpeg 6.1.1 on Linux for loudnorm JSON parseability. No copyrighted media and no user cookies. Mac packaging/runtime **[Not tested]** in this pass |
 | Normalisation with real ffmpeg on test files (tones and synthetic signals) | **[Measured]** with ffmpeg 6.1.1 on Linux: −14 reached on all three files; −9 reached on two, not on a loud one (−12.9). See [Normalize](#if-normalization-fails) |
 | Normalisation through the app window with Normalize on on real music, with the ffmpeg of a verified fresh install of this candidate's package, or in a packaged build (one mono tone with a copied review ffmpeg is in the row above) | **[Not tested]** |
 | Normalize failure warning: texts, amber message, Queue note, cancel handling (single file, several files, cancel racing a successful ffmpeg exit) | **[Unit-tested]**; the window half **[Observed]** in a simulated window; failure, single-file cancel and a two-file cancel with real ffmpeg **[Measured]**; the cancel-vs-successful-exit race with real ffmpeg, a temporary-file deletion failure and a replacement failure on a real file system **[Not tested]** (the last two only simulated) |
