@@ -194,7 +194,7 @@ test("real runQueue + real main.js: damaged destinations become error rows, api.
       const calls = [];
       page.ctx.api.download = async (opts) => { calls.push(clone(opts)); return h.invoke("download", opts); };
       const noop = () => {};
-      Object.assign(page.ctx, { stopAllRequested: false, plProgress: null, queueActiveId: null, normWarnText: () => "", canceledNote: () => "", setCancelBusy: noop, updateActiveCount: noop, finishPlaylistProgress: noop, hideBar: noop, lastSeg: (x) => String(x || "").split(/[\\/]/).pop(), setTimeout });
+      Object.assign(page.ctx, { stopAllRequested: false, plProgress: null, queueActiveId: null, normWarnText: () => "", tagWarnText: () => "", canceledNote: () => "", setCancelBusy: noop, updateActiveCount: noop, finishPlaylistProgress: noop, hideBar: noop, lastSeg: (x) => String(x || "").split(/[\\/]/).pop(), setTimeout });
       page.ctx.api.queueUpdateItem = async (patch) => { const it = page.store.queue.find(i => i.id === patch.id); if (it) Object.assign(it, clone(patch)); return { ok: true }; };
       vm.runInContext(cutBlock(RENDERER, "async function runQueue("), page.ctx);
       await page.ctx.runQueue();

@@ -75,6 +75,10 @@ const I18N = {
     norm_warn_in: "Guardado en {folder}.",
     norm_reason_measure: "no se pudo medir el volumen", norm_reason_apply: "ffmpeg no pudo aplicar la corrección",
     norm_reason_replace: "no se pudo reemplazar el archivo", norm_reason_error: "error inesperado",
+    norm_reason_true_peak: "el true peak quedó por encima de -1.0 dBTP; se conservó el original",
+    norm_reason_target_miss: "el volumen medido quedó a más de 1 LU del target",
+    norm_miss: "⚠ Normalizado, pero no llegó al target: {n} de {total} archivo(s) ({reason}).",
+    tag_warn: "⚠ Etiquetado incompleto: {n} de {total} archivo(s) se guardaron sin tags.",
     q_canceled_kept: "Cancelada al normalizar — lo descargado se conservó, sin normalizar. ↻ para reintentar",
     q_canceled_partial: "Cancelada al normalizar — {done} de {total} archivo(s) ya estaban normalizados y se conservaron; los demás se conservaron sin normalizar. ↻ para reintentar",
     q_canceled_all: "Cancelada — los {total} archivo(s) ya estaban normalizados y se conservaron. ↻ para reintentar",
@@ -237,6 +241,10 @@ const I18N = {
     norm_warn_in: "Saved in {folder}.",
     norm_reason_measure: "couldn't measure the loudness", norm_reason_apply: "ffmpeg couldn't apply the correction",
     norm_reason_replace: "couldn't replace the file", norm_reason_error: "unexpected error",
+    norm_reason_true_peak: "true peak was above -1.0 dBTP; original file kept",
+    norm_reason_target_miss: "measured loudness is more than 1 LU from the target",
+    norm_miss: "⚠ Normalized, but missed the loudness target: {n} of {total} file(s) ({reason}).",
+    tag_warn: "⚠ Tagging incomplete: {n} of {total} file(s) were saved without tags.",
     q_canceled_kept: "Cancelled while normalizing — what was downloaded was kept, not normalized. ↻ to retry",
     q_canceled_partial: "Cancelled while normalizing — {done} of {total} file(s) were already normalized and kept; the rest were kept, not normalized. ↻ to retry",
     q_canceled_all: "Cancelled — all {total} file(s) were already normalized and kept. ↻ to retry",
@@ -1101,9 +1109,14 @@ function flashMsg(text, cls, ms) {
 // Normalize was requested but did not complete for some files (main sends r.normalizeWarning; the files are kept as downloaded).
 function normWarnText(w) {
   if (!w || !Array.isArray(w.failed) || !w.failed.length) return "";
-  const known = ["measure", "apply", "replace"];
+  const known = ["measure", "apply", "replace", "true_peak", "target_miss"];
   const why = [...new Set(w.failed.map(f => t("norm_reason_" + (known.includes(f && f.reason) ? f.reason : "error"))))].join("; ");
-  return t("norm_warn").replace("{n}", w.failed.length).replace("{total}", w.total || w.failed.length).replace("{reason}", why);
+  const tmpl = w.failed.every(f => f && f.reason === "target_miss") ? "norm_miss" : "norm_warn";
+  return t(tmpl).replace("{n}", w.failed.length).replace("{total}", w.total || w.failed.length).replace("{reason}", why);
+}
+function tagWarnText(w) {
+  if (!w || !w.failed) return "";
+  return t("tag_warn").replace("{n}", w.failed).replace("{total}", w.total || w.failed);
 }
 
 // Cancelled while normalizing, with finished files left in the folder (main sends keptFiles, and which of them were
@@ -1476,7 +1489,7 @@ async function runDownload(opts) {
   if (r.duplicate) { hideBar(); showDupWarning(r, opts); return; }
   if (r.ok) {
     resetBar(100);
-    const warn = normWarnText(r.normalizeWarning);
+    const warn = [normWarnText(r.normalizeWarning), tagWarnText(r.tagWarning)].filter(Boolean).join(" ");
     if (warn) {
       msg.className = "warn";
       msg.textContent = warn + " " + t("norm_warn_in").replace("{folder}", lastSeg(r.folder) || t("main_folder_lc"));
@@ -2010,7 +2023,7 @@ async function runQueue() {
     let title = item.title;
     let error = null;
     let note = null;
-    const normWarn = r.ok ? normWarnText(r.normalizeWarning) : "";
+    const normWarn = r.ok ? [normWarnText(r.normalizeWarning), tagWarnText(r.tagWarning)].filter(Boolean).join(" ") : "";
     if (r.ok) {
       status = "done";   // the file IS downloaded; a normalization problem is a warning on a done row, not an error
       if (r.files && r.files[0]) title = lastSeg(r.files[0]);

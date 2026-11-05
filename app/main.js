@@ -1712,16 +1712,14 @@ function tagAudioFile(file, { url, genre, info }) {
 //   "measure"  — pass 1 could not measure the loudness;
 //   "apply"    — pass 2 failed, or produced no audio;
 //   "replace"  — pass 2 worked but the normalized file could not replace the original.
-async function loudnormTwoPass(file, I = -14, bitrate = null) {
-  if (cancelRequested) return { ok: false, reason: "canceled" };
+function loudnormMeasure(file, I) {
   const ffmpeg = path.join(BIN_DIR, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
-  // Pass 1: measure
-  const meas = await new Promise((res) => {
+  return new Promise((res) => {
     let err = "";
     const c = trackChild(spawn(ffmpeg, ["-i", file, "-af",
       `loudnorm=I=${I}:TP=-1.5:LRA=11:print_format=json`, "-f", "null", "-"],
       { windowsHide: true }));
-    c.stderr.on("data", d => err += d);
+    c.stderr.on("data", (d) => { err += d; });
     c.on("error", () => { untrackChild(c); res(null); });
     c.on("close", () => {
       untrackChild(c);
@@ -1729,6 +1727,13 @@ async function loudnormTwoPass(file, I = -14, bitrate = null) {
       try { res(m ? JSON.parse(m[0]) : null); } catch (_) { res(null); }
     });
   });
+}
+
+async function loudnormTwoPass(file, I = -14, bitrate = null) {
+  if (cancelRequested) return { ok: false, reason: "canceled" };
+  const ffmpeg = path.join(BIN_DIR, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+  // Pass 1: measure
+  const meas = await loudnormMeasure(file, I);
   if (cancelRequested) return { ok: false, reason: "canceled" };
   if (!meas) return { ok: false, reason: "measure" };
   // Pass 2: apply
@@ -1765,9 +1770,26 @@ async function loudnormTwoPass(file, I = -14, bitrate = null) {
       let size = 0;
       try { size = fs.statSync(tmp).size; } catch (_) {}
       if (!(size > 0)) { dropTmp(); return res({ ok: false, reason: "apply" }); }
-      try { fs.renameSync(tmp, file); }
-      catch (e) { dropTmp(); return res({ ok: false, reason: "replace", error: (e && (e.code || e.message)) || "rename failed" }); }
-      res({ ok: true });
+      loudnormMeasure(tmp, I).then((measOut) => {
+        if (cancelRequested) { dropTmp(); return res({ ok: false, reason: "canceled" }); }
+        if (!measOut) { dropTmp(); return res({ ok: false, reason: "apply" }); }
+        const outputI = Number(measOut.input_i);
+        const outputTp = Number(measOut.input_tp);
+        if (!Number.isFinite(outputI) || !Number.isFinite(outputTp)) {
+          dropTmp();
+          return res({ ok: false, reason: "apply" });
+        }
+        if (outputTp > -1.0) {
+          dropTmp();
+          return res({ ok: false, reason: "true_peak", outputI, outputTp });
+        }
+        try { fs.renameSync(tmp, file); }
+        catch (e) { dropTmp(); return res({ ok: false, reason: "replace", error: (e && (e.code || e.message)) || "rename failed" }); }
+        if (Math.abs(outputI - I) > 1.0) {
+          return res({ ok: true, miss: true, reason: "target_miss", outputI, outputTp });
+        }
+        res({ ok: true });
+      }).catch(() => { dropTmp(); res({ ok: false, reason: "apply" }); });
     });
   });
 }
@@ -1957,7 +1979,11 @@ ipcMain.handle("download", async (_e, opts) => {
             let r;
             try { r = await loudnormTwoPass(f, lufsTarget2, bitrate); }
             catch (_) { r = { ok: false, reason: "error" }; }
-            if (r && r.ok === true) { normalizedOk.push(f); continue; }
+            if (r && r.ok === true) {
+              normalizedOk.push(f);
+              if (r.miss) failed.push({ file: f, reason: r.reason || "target_miss", outputI: r.outputI, outputTp: r.outputTp });
+              continue;
+            }
             const reason = (r && r.reason) || "apply";
             // Cancel pressed while normalizing: stop here, don't count it as a failure.
             if (reason === "canceled" || cancelRequested) {
@@ -1980,14 +2006,22 @@ ipcMain.handle("download", async (_e, opts) => {
     }
 
     // Feature 1: auto-tag (after loudnorm to preserve tags)
+    let tagWarning = null;
     if (wantAudio && files.length) {
       const cfgTag = loadConfig();
       const doTag = autoTag !== undefined ? autoTag : cfgFlag(cfgTag, "auto_tag");
       if (doTag) {
         const genre = folder || path.basename(outDir);
+        let tagFailed = 0, tagTotal = 0;
         for (const f of files) {
-          try { await tagAudioFile(f, { url, genre, info: probeResult }); } catch (_) {}
+          let tr;
+          try { tr = await tagAudioFile(f, { url, genre, info: probeResult }); }
+          catch (_) { tr = { error: true }; }
+          if (tr && tr.skipped) continue;
+          tagTotal++;
+          if (!tr || tr.ok === false || tr.error) tagFailed++;
         }
+        if (tagFailed) tagWarning = { failed: tagFailed, total: tagTotal };
       }
     }
 
@@ -2037,7 +2071,7 @@ ipcMain.handle("download", async (_e, opts) => {
       }
     }
 
-    return { ok: true, count: files.length, files, folder: outDir, ...(encodePlan ? { encodePlan } : {}), ...(normalizeWarning ? { normalizeWarning } : {}) };
+    return { ok: true, count: files.length, files, folder: outDir, ...(encodePlan ? { encodePlan } : {}), ...(normalizeWarning ? { normalizeWarning } : {}), ...(tagWarning ? { tagWarning } : {}) };
   } catch (e) {
     if (e && e.canceled) {
       cleanPartials(outDir);
