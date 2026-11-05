@@ -65,8 +65,9 @@ function saveConfig(cfg) { writeJsonAtomic(CONFIG_FILE, cfg); }
 //  - A key that is ABSENT from config.json was never saved: the default below applies.
 //  - A key that is PRESENT (true or false) is an explicit choice and always wins.
 //  - Defaults are never written into config.json, so they cannot override a saved choice.
-// Audio format and quality are not saved between launches (the Download tab starts from these each
-// time); renderer.js DEFAULT_AUDIO_BITRATE and the selected <option>s in index.html mirror them, and
+// Audio format/bitrate stay at the HTML defaults until the user changes them; then they are stored
+// as audio_format (full select value) and audio_bitrate. Absent keys keep today's MP3 / 320 defaults.
+// renderer.js DEFAULT_AUDIO_BITRATE and the selected <option>s in index.html mirror DEFAULTS, and
 // test/defaults.test.js checks that all of them agree.
 // ---------------------------------------------------------------------------
 const DEFAULTS = Object.freeze({
@@ -1344,6 +1345,9 @@ ipcMain.handle("get-settings", () => {
     cookies_browser: cfg.cookies_browser || "",   // "" = no cookies
     folder_view: cfg.folder_view === "list" ? "list" : "chips", // Download-tab folder layout
     folder_density: cfg.folder_density === "comfortable" ? "comfortable" : "compact", // default compact
+    ui_format: savedUiFormat(cfg),
+    audio_format: savedUiFormat(cfg),
+    audio_bitrate: savedBitrate(cfg),
   };
 });
 
@@ -1365,6 +1369,33 @@ ipcMain.handle("set-prevent-duplicates", (_e, val) => {
 });
 
 ipcMain.handle("set-auto-tag",       (_e, v) => { const c = loadConfig(); c.auto_tag = !!v; saveConfig(c); return { ok: true }; });
+const ALLOWED_UI_FORMATS = new Set([
+  "audio:mp3", "audio:m4a", "audio:wav", "audio:flac",
+  "video:original", "video:1080", "video:720", "video:best",
+]);
+function savedUiFormat(cfg) {
+  return ALLOWED_UI_FORMATS.has(cfg.audio_format) ? cfg.audio_format : null;
+}
+function savedBitrate(cfg) {
+  const v = cfg.audio_bitrate == null ? null : String(cfg.audio_bitrate);
+  return v === "128" || v === "192" || v === "320" ? v : null;
+}
+ipcMain.handle("set-audio-format", (_e, v) => {
+  const val = String(v || "");
+  if (!ALLOWED_UI_FORMATS.has(val)) return { ok: false };
+  const c = loadConfig();
+  c.audio_format = val;
+  saveConfig(c);
+  return { ok: true };
+});
+ipcMain.handle("set-audio-bitrate", (_e, v) => {
+  const val = String(v || "");
+  if (val !== "128" && val !== "192" && val !== "320") return { ok: false };
+  const c = loadConfig();
+  c.audio_bitrate = val;
+  saveConfig(c);
+  return { ok: true };
+});
 ipcMain.handle("set-loudnorm",       (_e, v) => { const c = loadConfig(); c.loudnorm = !!v; saveConfig(c); return { ok: true }; });
 ipcMain.handle("set-lufs",           (_e, v) => { const c = loadConfig(); c.lufs = Number(v) || DEFAULTS.lufs; saveConfig(c); return { ok: true }; });
 ipcMain.handle("set-suggest-folder", (_e, v) => { const c = loadConfig(); c.suggest_folder = !!v; saveConfig(c); return { ok: true }; });

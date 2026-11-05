@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld("api", {
   cancelDownload: () => ipcRenderer.invoke("cancel-download"),
   setPreventDuplicates: (val) => ipcRenderer.invoke("set-prevent-duplicates", val),
   setAutoTag: (v) => ipcRenderer.invoke("set-auto-tag", v),
+  setAudioFormat: (v) => ipcRenderer.invoke("set-audio-format", v),
+  setAudioBitrate: (v) => ipcRenderer.invoke("set-audio-bitrate", v),
   setLoudnorm: (v) => ipcRenderer.invoke("set-loudnorm", v),
   setLufs: (v) => ipcRenderer.invoke("set-lufs", v),
   setSuggestFolder: (v) => ipcRenderer.invoke("set-suggest-folder", v),

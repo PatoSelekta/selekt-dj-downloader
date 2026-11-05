@@ -326,3 +326,54 @@ test("watch folder: items already in the queue keep their stored 192; a new scan
     await h.invoke("watch-stop");
   });
 });
+
+test("absent audio_format/audio_bitrate: get-settings reports null saved keys; Download tab defaults stay MP3/320", T, async () => {
+  await withConfig({}, async (h) => {
+    const s = await h.invoke("get-settings");
+    assert.equal(s.ui_format, null);
+    assert.equal(s.audio_format, null);
+    assert.equal(s.audio_bitrate, null);
+    assert.equal(htmlSelectedValue("format"), "audio:mp3");
+    assert.equal(htmlSelectedValue("bitrate"), "320");
+  });
+});
+
+test("set-audio-format + set-audio-bitrate round-trip in config.json and get-settings", T, async () => {
+  await withConfig({}, async (h) => {
+    assert.deepEqual(await h.invoke("set-audio-format", "audio:m4a"), { ok: true });
+    assert.deepEqual(await h.invoke("set-audio-bitrate", "192"), { ok: true });
+    const cfg = h.config();
+    assert.equal(cfg.audio_format, "audio:m4a");
+    assert.equal(cfg.audio_bitrate, "192");
+    const s = await h.invoke("get-settings");
+    assert.equal(s.ui_format, "audio:m4a");
+    assert.equal(s.audio_format, "audio:m4a");
+    assert.equal(s.audio_bitrate, "192");
+  });
+});
+
+test("get-settings does not write audio_format into an empty config", T, async () => {
+  await withConfig({}, async (h) => {
+    await h.invoke("get-settings");
+    await h.invoke("get-settings");
+    const saved = h.config();
+    assert.ok(!("audio_format" in saved));
+    assert.ok(!("audio_bitrate" in saved));
+  });
+});
+
+test("invalid format or bitrate is rejected and does not write config", T, async () => {
+  await withConfig({}, async (h) => {
+    assert.deepEqual(await h.invoke("set-audio-format", "audio:ogg"), { ok: false });
+    assert.deepEqual(await h.invoke("set-audio-bitrate", "256"), { ok: false });
+    const saved = h.config();
+    assert.ok(!("audio_format" in saved));
+    assert.ok(!("audio_bitrate" in saved));
+  });
+});
+
+test("renderer applies saved format/bitrate on settings load and persists on change", T, () => {
+  assert.match(RENDERER, /s\.ui_format \|\| s\.audio_format/);
+  assert.match(RENDERER, /api\.setAudioFormat/);
+  assert.match(RENDERER, /api\.setAudioBitrate/);
+});

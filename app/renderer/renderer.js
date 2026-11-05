@@ -504,6 +504,10 @@ async function refreshSettings() {
   folderDensity = s.folder_density === "comfortable" ? "comfortable" : "compact";
   if ($("densCompact")) $("densCompact").classList.toggle("active", folderDensity === "compact");
   if ($("densComfort")) $("densComfort").classList.toggle("active", folderDensity === "comfortable");
+  const savedFmt = s.ui_format || s.audio_format;
+  if (savedFmt && $("format")) $("format").value = savedFmt;
+  if (s.audio_bitrate && $("bitrate")) $("bitrate").value = String(s.audio_bitrate);
+  updateBitrateVis();
   updateDockSummary();
 }
 
@@ -1202,8 +1206,14 @@ function updateBitrateVis() {
   $("bitrateWrap").style.display = lossy ? "" : "none";
   updateDockSummary();
 }
-$("format").addEventListener("change", updateBitrateVis);
-$("bitrate").addEventListener("change", updateDockSummary);
+$("format").addEventListener("change", () => {
+  updateBitrateVis();
+  api.setAudioFormat($("format").value);
+});
+$("bitrate").addEventListener("change", () => {
+  updateDockSummary();
+  api.setAudioBitrate($("bitrate").value);
+});
 updateBitrateVis();
 
 // ---- playlist toggle ----
