@@ -63,8 +63,8 @@ test("queue: malformed destinations error per item, never download into the main
     assert.match(after.find(i => i.id === "6").error, /Invalid folder name/);
     assert.equal(after.length, stored.length, "queue format and length preserved");
     stored.forEach((s, k) => assert.deepEqual(after[k].destId, s.destId, "stored destId not rewritten"));
-    const calls = h.ytdlpCalls();
-    assert.equal(calls.length, 5, "only the five valid items launched yt-dlp");
+    const calls = h.ytdlpCalls().filter(c => c.args.includes("-o"));
+    assert.equal(calls.length, 5, "only the five valid items launched a yt-dlp download");
     assert.deepEqual(calls.map(tmplDir), [
       music, music, path.join(music, "Techno"), fav, path.dirname(path.join(fav, "%(playlist_title)s", "x")),
     ]);
@@ -166,8 +166,10 @@ test("source guard: renderer wiring for the corrections", () => {
   const html = fs.readFileSync(path.join(dir, "renderer", "index.html"), "utf8");
   const pre = fs.readFileSync(path.join(dir, "preload.js"), "utf8");
   assert.ok(html.indexOf('src="destination.js"') > 0 && html.indexOf('src="destination.js"') < html.indexOf('src="renderer.js"'), "destination.js loads before renderer.js");
+  const main = fs.readFileSync(path.join(dir, "main.js"), "utf8");
   assert.match(r, /return SelektDest\.queueItemDest\(item\)/);
-  assert.match(r, /if \(opts\.destInvalid\)/);
+  assert.match(main, /if \(dest\.destInvalid\)/);
+  assert.match(r, /errorCode === "dest_bad"/);
   assert.equal((r.match(/await tryCreateFolder\(name\)/g) || []).length, 2, "both creation flows go through tryCreateFolder");
   assert.equal((r.match(/await api\.createFolder\(/g) || []).length, 1, "createFolder is only called inside tryCreateFolder");
   assert.match(r, /api\.pickMainFolder\(\)/);

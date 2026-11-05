@@ -364,12 +364,13 @@ test("renderer canceledNote: none / some / all normalized, no kept file, and an 
 
 test("renderer contract (source guard): a warning keeps the row 'done' with the warning as its note; cancel with kept files has its own note; the message uses the warn style", T, () => {
   const html = fs.readFileSync(path.join(APP, "renderer", "index.html"), "utf8");
+  const MAIN = fs.readFileSync(path.join(APP, "main.js"), "utf8");
   assert.match(html, /#msg\.warn\{color:#f5a623\}/);
-  assert.match(RENDERER, /const normWarn = r\.ok \? \[normWarnText\(r\.normalizeWarning\), tagWarnText\(r\.tagWarning\)\]/);
-  assert.match(RENDERER, /status = "done";[^\n]*\n[^\n]*\n\s*if \(normWarn\) note = normWarn;/);
-  assert.match(RENDERER, /note = canceledNote\(r\) \|\| t\("q_canceled"\);/);
-  assert.match(RENDERER, /msg\.textContent = canceledNote\(r\) \|\| t\("canceled_msg"\);/);
-  assert.match(RENDERER, /status === "done" && normWarn\) \{\s*msg\.className = "warn";/);
+  assert.match(MAIN, /status = "done";/);
+  assert.match(MAIN, /bits\.push\("normalization warning"\)/);
+  assert.match(RENDERER, /canceledNote\(item\) \|\| item\.note \|\| t\("q_canceled"\)/);
+  assert.match(RENDERER, /msg\.textContent = canceledNote\(item\) \|\| t\("canceled_msg"\);/);
+  assert.match(RENDERER, /item\.status === "done" && normWarn\) \{\s*msg\.className = "warn";/);
   assert.match(RENDERER, /msg\.className = "warn";\s*msg\.textContent = warn \+ " "/);   // the single-download path (runDownload)
 });
 

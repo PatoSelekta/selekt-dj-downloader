@@ -1864,9 +1864,12 @@ async function renderQueue() {
     } else if (item.error) {
       // Full error, wrapped (not clipped) so the real cause is always visible;
       // title= gives the same text on hover as a fallback.
-      progressHtml = `<div class="q-err" title="${escapeHtml(item.error)}">${escapeHtml(item.error)}</div>`;
-    } else if (item.note) {
-      progressHtml = `<div class="q-note">${escapeHtml(item.note)}</div>`;
+      const errText = item.errorCode === "dest_bad" ? t("dest_bad")
+        : (item.needsCookies ? t("cookies_hint") : item.error);
+      progressHtml = `<div class="q-err" title="${escapeHtml(errText)}">${escapeHtml(errText)}</div>`;
+    } else if (item.note || item.status === "canceled") {
+      const noteText = item.status === "canceled" ? (canceledNote(item) || item.note || t("q_canceled")) : item.note;
+      progressHtml = `<div class="q-note">${escapeHtml(noteText)}</div>`;
     }
     const fpHtml = item.fpDup
       ? `<div class="q-fpdup" data-fp-dup="1">⚑ ${escapeHtml(t("fp_dup_head"))}${item.fpDup.matchTitle ? " — " + escapeHtml(item.fpDup.matchTitle) : ""}</div>`
@@ -1976,119 +1979,82 @@ function updateQueueRowProgress(id, info) {
   el.textContent = s;
 }
 
-// Sequential queue runner. Re-queries each iteration so links you add WHILE it's
-// running (by pressing Download again) get picked up in order.
+// Dispatch-only: the sequential runner lives in main. This starts (or unpauses)
+// that loop and lets queue-changed / queue-idle keep the UI in sync.
 async function runQueue() {
-  if (queueRunning) return;
-  queueRunning = true; queuePaused = false;
+  queuePaused = false;
+  try {
+    const st = await api.queueStart();
+    queueRunning = !!(st && st.running);
+  } catch (_) {
+    queueRunning = false;
+  }
   renderQueue();
+}
 
-  while (queueRunning) {
-    if (queuePaused) {
-      await new Promise(r => setTimeout(r, 300));
-      continue;
-    }
-    const q = await api.queueGet();
-    const item = q.find(i => i.status === "pending");
-    if (!item) break;  // nothing left — but new presses can re-trigger runQueue()
-
-    // Show the prominent card for this item — start in the indeterminate state
-    // (sliding stripe) so there's visible motion before the first % arrives.
-    $("dlActiveTitle").textContent = item.title || item.url;
-    $("dlActiveTrack").textContent = "";   // reset per-track counter for the new item
-    $("dlActiveBar").classList.add("indet");
-    $("dlActiveFill").style.width = ""; $("dlActiveFill").style.marginLeft = "";
-    $("dlActivePct").textContent = "";
-    $("dlActiveSpeed").textContent = "";
-    $("dlActiveEta").textContent = "";
-    $("dlActivePhase").textContent = "";
-    $("dlActive").style.display = "block";
-    setCancelBusy(false);   // re-arm Cancel for this item
-
-    queueActiveId = item.id;
-    await api.queueUpdateItem({ id: item.id, status: "running" });
-    updateActiveCount();   // "N waiting" after this one
-    renderQueue();
-
-    const opts = toDownloadOpts(item);
-    let r;
-    if (opts.destInvalid) {
-      r = { ok: false, error: t("dest_bad") };   // malformed destId: per-item error, nothing sent to main
-    } else {
-      try { r = await api.download(opts); }
-      catch (e) { r = { ok: false, error: String(e) }; }
-    }
-
-    let status = "error";
-    let title = item.title;
-    let error = null;
-    let note = null;
-    const normWarn = r.ok ? [normWarnText(r.normalizeWarning), tagWarnText(r.tagWarning)].filter(Boolean).join(" ") : "";
-    if (r.ok) {
-      status = "done";   // the file IS downloaded; a normalization problem is a warning on a done row, not an error
-      if (r.files && r.files[0]) title = lastSeg(r.files[0]);
-      if (normWarn) note = normWarn;
-    } else if (r.canceled) {
-      status = "canceled";
-      note = canceledNote(r) || t("q_canceled");   // retryable, not a failure
-    } else if (r.duplicate || r.skipped) {
-      status = "skipped";
-      note = t("q_skipped_dup");   // explain WHY (so it's not mistaken for an error)
-    } else {
-      error = r.needsCookies ? t("cookies_hint") : (r.error || t("dl_failed"));
-    }
-
-    await api.queueUpdateItem({ id: item.id, status, title, error, note });
-
-    // If this item is the one the picker dialog is tracking, finalize its view.
-    if (plProgress && plProgress.itemId === item.id) finishPlaylistProgress(status);
-
-    // Mirror the result onto the Download tab so failures are visible without
-    // opening the Queue tab. Errors persist (not auto-cleared) so the user can
-    // read them; a success briefly confirms.
-    const msg = $("msg");
-    if (msg) {
-      if (status === "error") {
-        msg.className = "err";
-        msg.textContent = t("err_pre") + " " + (title || item.url) + " — " + error;
-      } else if (status === "done" && normWarn) {
-        msg.className = "warn";
-        msg.textContent = normWarn + " " + t("norm_warn_in").replace("{folder}", lastSeg(r.folder) || t("main_folder_lc"));
-      } else if (status === "done") {
-        msg.className = "ok";
-        msg.textContent = t("done_msg").replace("{n}", (r.count != null ? r.count : 1))
-          .replace("{folder}", lastSeg(r.folder) || t("main_folder_lc"));
-      } else if (status === "canceled") {
-        msg.className = "";
-        msg.textContent = canceledNote(r) || t("canceled_msg");
-      }
-    }
-
-    queueActiveId = null;
-    renderQueue();
-
-    // "Stop all": also cancel everything still waiting, then leave the loop.
-    // Items become "canceled" (not deleted) so ↻ can bring any of them back.
-    if (stopAllRequested) {
-      stopAllRequested = false;
-      const rest = await api.queueGet();
-      let n = 0;
-      for (const it of rest) {
-        if (it.status === "pending") {
-          await api.queueUpdateItem({ id: it.id, status: "canceled", error: null, note: t("q_canceled") });
-          n++;
-        }
-      }
-      if (msg) { msg.className = ""; msg.textContent = t("canceled_all_msg").replace("{n}", n); }
-      renderQueue();
-      break;
+let lastQueueSnapshot = [];
+function showQueueItemOutcome(item) {
+  const msg = $("msg");
+  if (!msg) return;
+  const title = item.title || item.url;
+  const normWarn = item.status === "done"
+    ? [normWarnText(item.normalize), tagWarnText(item.tagWarning)].filter(Boolean).join(" ")
+    : "";
+  if (item.status === "error") {
+    const error = item.errorCode === "dest_bad" ? t("dest_bad")
+      : (item.needsCookies ? t("cookies_hint") : (item.error || t("dl_failed")));
+    msg.className = "err";
+    msg.textContent = t("err_pre") + " " + title + " — " + error;
+  } else if (item.status === "done" && normWarn) {
+    msg.className = "warn";
+    msg.textContent = normWarn + " " + t("norm_warn_in").replace("{folder}", lastSeg(item.outputDir) || t("main_folder_lc"));
+  } else if (item.status === "done") {
+    msg.className = "ok";
+    msg.textContent = t("done_msg").replace("{n}", (item.files && item.files.length) || 1)
+      .replace("{folder}", lastSeg(item.outputDir) || t("main_folder_lc"));
+  } else if (item.status === "canceled") {
+    msg.className = "";
+    msg.textContent = canceledNote(item) || t("canceled_msg");
+  }
+}
+async function syncQueueFromMain() {
+  let st = null;
+  try { st = await api.queueStatus(); } catch (_) {}
+  if (st) {
+    queueRunning = !!st.running;
+    queuePaused = !!st.paused;
+    queueActiveId = st.currentId || null;
+  }
+  const q = await api.queueGet();
+  const running = q.find(i => i.status === "running");
+  if (running) {
+    queueActiveId = running.id;
+    queueRunning = true;
+    if ($("dlActiveTitle")) $("dlActiveTitle").textContent = running.title || running.url;
+    if ($("dlActiveTrack")) $("dlActiveTrack").textContent = "";
+    if ($("dlActive")) $("dlActive").style.display = "block";
+    if ($("dlActiveBar")) $("dlActiveBar").classList.add("indet");
+    setCancelBusy(false);
+  }
+  for (const item of q) {
+    const prev = lastQueueSnapshot.find(x => x.id === item.id);
+    if (prev && prev.status !== item.status) showQueueItemOutcome(item);
+    if (plProgress && plProgress.itemId === item.id && item.status !== "pending" && item.status !== "running") {
+      finishPlaylistProgress(item.status);
     }
   }
-
-  queueRunning = false; queueActiveId = null; stopAllRequested = false;
+  lastQueueSnapshot = q.map(i => ({ id: i.id, status: i.status }));
+  renderQueue();
+  updateActiveCount();
+}
+function queueBecameIdle() {
+  queueRunning = false;
+  queuePaused = false;
+  queueActiveId = null;
+  stopAllRequested = false;
   hideBar();
   setCancelBusy(false);
-  if ($("dlActive")) $("dlActive").style.display = "none";  // hide card when queue is empty
+  if ($("dlActive")) $("dlActive").style.display = "none";
   if ($("dlActiveBar")) $("dlActiveBar").classList.remove("indet");
   renderQueue();
 }
@@ -2113,7 +2079,7 @@ if ($("dlStopAllBtn")) $("dlStopAllBtn").onclick = async () => {
   if (!queueRunning) return;
   stopAllRequested = true;
   setCancelBusy(true);
-  try { await api.cancelDownload(); } catch (_) { stopAllRequested = false; setCancelBusy(false); }
+  try { await api.queueStopAll(); } catch (_) { stopAllRequested = false; setCancelBusy(false); }
 };
 
 // "N waiting" badge on the active-download card (pending after the current one).
@@ -2134,16 +2100,21 @@ async function updateActiveCount() {
 // ---- Queue UI event handlers ----
 $("queueRunBtn").onclick = () => { queuePaused = false; runQueue(); };
 
-$("queuePauseBtn").onclick = () => {
-  if (queueRunning) {
-    queuePaused = !queuePaused;
-    $("queuePauseBtn").textContent = queuePaused ? t("queue_resume") : t("queue_pause");
+$("queuePauseBtn").onclick = async () => {
+  if (!queueRunning) return;
+  if (queuePaused) {
+    queuePaused = false;
+    try { await api.queueStart(); } catch (_) {}
+  } else {
+    queuePaused = true;
+    try { await api.queuePause(); } catch (_) {}
   }
+  $("queuePauseBtn").textContent = queuePaused ? t("queue_resume") : t("queue_pause");
 };
 
 $("queueClearBtn").onclick = async () => {
-  if (queueRunning) { queueRunning = false; queueActiveId = null; }
   await api.queueClear();
+  queueRunning = false; queueActiveId = null;
   renderQueue();
 };
 
@@ -2209,8 +2180,9 @@ $("queueResumeDismiss").onclick = () => {
 };
 
 // Backend events
-api.onQueueChanged(() => renderQueue());
+api.onQueueChanged(() => { syncQueueFromMain(); });
 api.onQueueRun(() => runQueue());
+if (api.onQueueIdle) api.onQueueIdle(() => queueBecameIdle());
 
 // ===========================================================================
 // FEATURE 2 — WATCH-FOLDER SETTINGS

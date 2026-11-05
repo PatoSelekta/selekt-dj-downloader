@@ -353,12 +353,188 @@ ipcMain.handle("queue-add", (_e, items) => {
   return { ok: true, items: newItems };
 });
 
-ipcMain.handle("queue-clear", () => { saveQueue([]); return { ok: true }; });
-
 ipcMain.handle("queue-update-item", (_e, patch) => {
   const q = loadQueue();
   const i = q.findIndex(x => x.id === patch.id);
   if (i >= 0) { Object.assign(q[i], patch); saveQueue(q); }
+  return { ok: true };
+});
+
+const SelektDest = require("./renderer/destination.js");
+const DEST_BAD_TEXT = "Invalid destination for this download. Choose the folder again.";
+const queueRunner = { running: false, paused: false, stopAll: false, currentId: null };
+function emitQueueChanged() {
+  if (mainWindow) mainWindow.webContents.send("queue-changed");
+}
+function queueItemToDownloadOpts(item) {
+  const dest = SelektDest.queueItemDest(item);
+  const cfg = loadConfig();
+  let format = item.format;
+  if (!format && item.type === "audio") format = "audio:" + (item.audioFormat || DEFAULTS.audioFormat);
+  if (!format && item.type === "video") format = "video:" + (item.quality || "best");
+  if (!format) format = "audio:mp3";
+  const [kind, val] = String(format).split(":");
+  const isPlaylist = !!item.playlist;
+  const opts = {
+    url: item.url,
+    type: isPlaylist ? "playlist" : (kind === "audio" ? "audio" : "video"),
+    audioFormat: kind === "audio" ? val : undefined,
+    bitrate: item.bitrate || DEFAULTS.audioBitrate,
+    quality: kind === "video" ? val : undefined,
+    noConvert: val === "original" || undefined,
+    force: !!item.force,
+    autoTag: item.autoTag !== undefined ? item.autoTag : cfgFlag(cfg, "auto_tag"),
+    loudnorm: item.loudnorm !== undefined ? item.loudnorm : cfgFlag(cfg, "loudnorm"),
+    lufs: item.lufs !== undefined ? item.lufs : cfgLufs(cfg),
+    _inQueue: true,
+    _queueId: item.id,
+  };
+  if (isPlaylist && kind === "audio") opts.audioOnly = true;
+  if (isPlaylist && Array.isArray(item.playlistItems) && item.playlistItems.length) {
+    opts.playlistItems = item.playlistItems;
+  }
+  Object.assign(opts, dest);
+  return opts;
+}
+function patchQueueItem(id, patch) {
+  const q = loadQueue();
+  const i = q.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  Object.assign(q[i], patch);
+  saveQueue(q);
+  emitQueueChanged();
+}
+function cancelPendingItems() {
+  const q = loadQueue();
+  let n = 0;
+  for (const it of q) {
+    if (it.status === "pending") {
+      it.status = "canceled";
+      it.error = null;
+      it.note = "Cancelled — ↻ to retry";
+      n++;
+    }
+  }
+  if (n) saveQueue(q);
+  emitQueueChanged();
+  return n;
+}
+async function runQueueLoop() {
+  try {
+    while (queueRunner.running) {
+      if (queueRunner.stopAll) {
+        cancelPendingItems();
+        break;
+      }
+      if (queueRunner.paused) {
+        await new Promise((r) => setTimeout(r, 200));
+        continue;
+      }
+      const q = loadQueue();
+      const item = q.find((i) => i.status === "pending");
+      if (!item) {
+        await new Promise((r) => setImmediate(r));
+        if (queueRunner.stopAll || !queueRunner.running) break;
+        if (!loadQueue().find((i) => i.status === "pending")) break;
+        continue;
+      }
+      queueRunner.currentId = item.id;
+      patchQueueItem(item.id, { status: "running" });
+      const dest = SelektDest.queueItemDest(item);
+      let r;
+      if (dest.destInvalid) {
+        r = { ok: false, error: DEST_BAD_TEXT, errorCode: "dest_bad" };
+      } else {
+        try { r = await handleDownload(queueItemToDownloadOpts(item)); }
+        catch (e) { r = { ok: false, error: String(e) }; }
+      }
+      let status = "error";
+      let title = item.title;
+      let error = null;
+      let note = null;
+      if (r && r.ok) {
+        status = "done";
+        if (r.files && r.files[0]) title = path.basename(r.files[0]);
+        const bits = [];
+        if (r.normalizeWarning && Array.isArray(r.normalizeWarning.failed) && r.normalizeWarning.failed.length) {
+          bits.push("normalization warning");
+        }
+        if (r.tagWarning && r.tagWarning.failed) bits.push("tagging incomplete");
+        note = bits.length ? bits.join("; ") : null;
+      } else if (r && r.canceled) {
+        status = "canceled";
+        note = "Cancelled — ↻ to retry";
+      } else if (r && (r.duplicate || r.skipped)) {
+        status = "skipped";
+        note = "Already in folder (duplicate) — ↻ to download anyway";
+      } else {
+        error = (r && r.error) || "download failed";
+      }
+      patchQueueItem(item.id, {
+        status, title, error, note,
+        errorCode: (r && r.errorCode) || null,
+        needsCookies: !!(r && r.needsCookies),
+        files: (r && r.files) || null,
+        outputDir: (r && r.folder) || null,
+        encodePlan: (r && r.encodePlan) || null,
+        normalize: (r && r.normalizeWarning) || null,
+        tagWarning: (r && r.tagWarning) || null,
+        keptFiles: (r && r.keptFiles) || null,
+        normalizedFiles: (r && r.normalizedFiles) || null,
+        progress: null,
+      });
+      queueRunner.currentId = null;
+      if (queueRunner.stopAll) {
+        cancelPendingItems();
+        break;
+      }
+    }
+  } finally {
+    queueRunner.running = false;
+    queueRunner.paused = false;
+    queueRunner.stopAll = false;
+    queueRunner.currentId = null;
+    emitQueueChanged();
+    if (mainWindow) mainWindow.webContents.send("queue-idle");
+  }
+}
+ipcMain.handle("queue-start", () => {
+  if (queueRunner.running) {
+    queueRunner.paused = false;
+    emitQueueChanged();
+    return { ok: true, running: true };
+  }
+  queueRunner.running = true;
+  queueRunner.paused = false;
+  queueRunner.stopAll = false;
+  queueRunner.currentId = null;
+  setImmediate(() => { runQueueLoop(); });
+  return { ok: true, running: true };
+});
+ipcMain.handle("queue-pause", () => {
+  queueRunner.paused = true;
+  emitQueueChanged();
+  return { paused: true };
+});
+ipcMain.handle("queue-stop-all", () => {
+  queueRunner.stopAll = true;
+  cancelRequested = true;
+  killActiveChild();
+  return { ok: true };
+});
+ipcMain.handle("queue-status", () => ({
+  running: queueRunner.running,
+  paused: queueRunner.paused,
+  currentId: queueRunner.currentId,
+}));
+ipcMain.handle("queue-clear", () => {
+  queueRunner.stopAll = true;
+  queueRunner.running = false;
+  queueRunner.paused = false;
+  cancelRequested = true;
+  killActiveChild();
+  saveQueue([]);
+  emitQueueChanged();
   return { ok: true };
 });
 
@@ -1278,11 +1454,15 @@ app.whenReady().then(() => {
     if (cfg.watch_enabled) {
       startWatchFile(cfg.watch_inbox_path || defaultWatchInboxPath());
     }
-    // Reset any stale "running" queue items to "pending" (app was killed mid-run)
-    const q = loadQueue();
-    let changed = false;
-    q.forEach(item => { if (item.status === "running") { item.status = "pending"; changed = true; } });
-    if (changed) saveQueue(q);
+    // Reset stale "running" items only when the runner is not active (app restart).
+    // A renderer reload (did-finish-load) while the main-owned loop is working
+    // must not flip the active row back to pending or start a second spawn.
+    if (!queueRunner.running) {
+      const q = loadQueue();
+      let changed = false;
+      q.forEach(item => { if (item.status === "running") { item.status = "pending"; changed = true; } });
+      if (changed) saveQueue(q);
+    }
   });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1843,7 +2023,7 @@ function planEncode({ audioFormat, bitrate, loudnorm, sourceAcodec, sourceAbr })
   };
 }
 
-ipcMain.handle("download", async (_e, opts) => {
+async function handleDownload(opts) {
   // Validate the link first: nothing below (binary setup, folder creation,
   // probe, process launch) runs for an invalid one.
   const urlCheck = checkYtdlpUrl(opts && opts.url);
@@ -2082,4 +2262,5 @@ ipcMain.handle("download", async (_e, opts) => {
   } finally {
     cancelRequested = false;
   }
-});
+}
+ipcMain.handle("download", (_e, opts) => handleDownload(opts));

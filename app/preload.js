@@ -52,8 +52,13 @@ contextBridge.exposeInMainWorld("api", {
   queueAdd: (items) => ipcRenderer.invoke("queue-add", items),
   queueClear: () => ipcRenderer.invoke("queue-clear"),
   queueUpdateItem: (patch) => ipcRenderer.invoke("queue-update-item", patch),
+  queueStart: () => ipcRenderer.invoke("queue-start"),
+  queuePause: () => ipcRenderer.invoke("queue-pause"),
+  queueStopAll: () => ipcRenderer.invoke("queue-stop-all"),
+  queueStatus: () => ipcRenderer.invoke("queue-status"),
   onQueueChanged: (cb) => ipcRenderer.on("queue-changed", () => cb()),
   onQueueRun: (cb) => ipcRenderer.on("queue-run", () => cb()),
+  onQueueIdle: (cb) => ipcRenderer.on("queue-idle", () => cb()),
 
   // --- Feature 2: Watch-folder ---
   watchGet: () => ipcRenderer.invoke("watch-get"),

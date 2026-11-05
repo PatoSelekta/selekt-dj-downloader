@@ -337,8 +337,9 @@ test("queued items: authorized destinations download, unauthorized/stale ones er
     assert.ok(fs.existsSync(path.join(L.fav, "stub.mp4")));
     assert.ok(fs.existsSync(path.join(L.music, "Techno", "stub.mp4")));
     assert.ok(fs.existsSync(path.join(L.music, "stub.mp4")));
-    assert.equal(h.ytdlpCalls().length, 4, "only authorized items launched yt-dlp");
-    assert.ok(tmplOf(h.ytdlpCalls()[3]).startsWith(path.join(L.fav, "%(playlist_title)s")));
+    const dlCalls = h.ytdlpCalls().filter(c => c.args.includes("-o"));
+    assert.equal(dlCalls.length, 4, "only authorized items launched a yt-dlp download");
+    assert.ok(tmplOf(dlCalls[3]).startsWith(path.join(L.fav, "%(playlist_title)s")));
   });
 });
 

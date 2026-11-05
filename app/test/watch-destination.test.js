@@ -5,7 +5,7 @@
 // What runs here: the REAL app/main.js (via h3-harness.js: isolated temp userData, fake yt-dlp/ffmpeg, no network, a
 // stubbed file watcher), the REAL Settings code cut out of renderer.js (run in a small fake page: it is NOT a real
 // window), and the shared destId -> options module the renderer also loads. A watched item is "run" the way
-// h3-harness.runQueueLikeRenderer mirrors renderer.runQueue. All folders live under a temp dir.
+// h3-harness.runQueueLikeRenderer starts the production main queue runner. All folders live under a temp dir.
 // NOT covered: the real iCloud/Dropbox inbox, a real chokidar watcher, a real window or a real download.
 // Run:  node --test app/test/watch-destination.test.js
 const test = require("node:test");

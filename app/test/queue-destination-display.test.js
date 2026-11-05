@@ -158,12 +158,12 @@ test("the valid destination contracts are unchanged: absent / null / '' = Main, 
   assert.equal(es.dom.select("x").shown.label, "⚠ Carpeta no disponible: false — elige otra");
 });
 
-test("running a queued item with a damaged destination: nothing is sent to main and nothing is downloaded to Main (real toDownloadOpts + real main.js)", T, async () => {
+test("running a queued item with a damaged destination: nothing is sent to download and nothing is downloaded to Main (real toDownloadOpts + real main.js)", T, async () => {
   const MAIN = fs.readFileSync(path.join(APP, "main.js"), "utf8");
   const RQ = cutBlock(RENDERER, "async function runQueue(");
-  assert.match(RQ, /if \(opts\.destInvalid\) \{\s*r = \{ ok: false, error: t\("dest_bad"\) \};/, "runQueue turns an invalid destination into a per-item error before calling main");
-  assert.ok(RQ.indexOf("if (opts.destInvalid)") < RQ.indexOf("api.download(opts)"));
-  void MAIN;
+  assert.match(RQ, /api\.queueStart\(/, "runQueue dispatches the main-owned runner");
+  assert.doesNotMatch(RQ, /api\.download\(/, "the queue path does not call api.download");
+  assert.match(MAIN, /if \(dest\.destInvalid\)/, "main runner fails malformed destId before download");
   for (const [name, bad] of BAD) {
     await withHarness({}, async (h) => {
       const page = await startPage({ queue: [item("a", bad)] });
@@ -183,29 +183,34 @@ test("running a queued item with a damaged destination: nothing is sent to main 
   }
 });
 
-// The REAL runQueue loop (cut from renderer.js) driving the REAL main.js download handler through the harness:
-// a damaged destination must end as an error row, must never call download, and must leave Main empty.
+// Production queue-start driving the REAL main.js download handler:
+// a damaged destination must end as an error row, must never call yt-dlp, and must leave Main empty.
 // A control row with a valid destination proves the same wiring does download when the destination is valid.
-test("real runQueue + real main.js: damaged destinations become error rows, api.download is never called, nothing lands in Main; a valid row downloads", T, async () => {
+test("production queue-start + real main.js: damaged destinations become error rows, yt-dlp is never called for them, nothing lands in Main; a valid row downloads", T, async () => {
   for (const [name, bad] of BAD) {
     await withHarness({}, async (h) => {
       const page = await startPage({ queue: [item("bad", bad), item("ok", "f:Techno")] });
       h.mkdir("Music/Techno");
-      const calls = [];
-      page.ctx.api.download = async (opts) => { calls.push(clone(opts)); return h.invoke("download", opts); };
-      const noop = () => {};
-      Object.assign(page.ctx, { stopAllRequested: false, plProgress: null, queueActiveId: null, normWarnText: () => "", tagWarnText: () => "", canceledNote: () => "", setCancelBusy: noop, updateActiveCount: noop, finishPlaylistProgress: noop, hideBar: noop, lastSeg: (x) => String(x || "").split(/[\\/]/).pop(), setTimeout });
-      page.ctx.api.queueUpdateItem = async (patch) => { const it = page.store.queue.find(i => i.id === patch.id); if (it) Object.assign(it, clone(patch)); return { ok: true }; };
-      vm.runInContext(cutBlock(RENDERER, "async function runQueue("), page.ctx);
-      await page.ctx.runQueue();
-      const bad_ = page.store.queue.find(i => i.id === "bad"), ok_ = page.store.queue.find(i => i.id === "ok");
+      await h.invoke("queue-set", [item("bad", bad), item("ok", "f:Techno")]);
+      await h.invoke("queue-start");
+      const end = Date.now() + 8000;
+      while (Date.now() < end) {
+        const st = await h.invoke("queue-status");
+        if (!st.running) break;
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      const q = await h.invoke("queue-get");
+      const bad_ = q.find(i => i.id === "bad"), ok_ = q.find(i => i.id === "ok");
       assert.equal(bad_.status, "error", name);
       assert.equal(bad_.error, I18N.en.dest_bad, name + ": the user-facing error is the 'invalid destination' one");
-      assert.ok(!calls.some(c => c.url.endsWith("/bad")), name + ": api.download was not called for the damaged row");
+      assert.equal(bad_.errorCode, "dest_bad", name);
       assert.equal(ok_.status, "done", name + ": the valid neighbour still ran");
-      assert.deepEqual(calls.map(c => c.folder), ["Techno"], name);
+      const dlCalls = h.ytdlpCalls().filter((c) => c.args.includes("-o"));
+      assert.equal(dlCalls.length, 1, name);
+      assert.equal(dlCalls[0].args[dlCalls[0].args.indexOf("-o") + 1].includes("Techno"), true, name);
       assert.deepEqual(fs.readdirSync(h.music).filter(n => n !== ".DS_Store" && n !== "Techno"), [], name + ": nothing was written to the main folder");
       // the failed row is still on screen, still editable, and re-pointing + retry makes it run
+      page.store.queue = q.map(clone);
       await page.ctx.renderQueue();
       assert.equal(page.dom.rows.length, 2);
       const sel = page.dom.select("bad");

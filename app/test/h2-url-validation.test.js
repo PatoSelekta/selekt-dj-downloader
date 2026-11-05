@@ -308,30 +308,17 @@ test("existing success/failure response shapes are unchanged", async () => {
 });
 
 // --- queue / retry / watch --------------------------------------------------
-// Mirrors the renderer's runQueue loop (renderer.js ~1703-1752): pick the first
-// pending item, mark running, call download, map the result to done/skipped/
-// canceled/error, continue. The renderer itself is not executed here.
-async function runQueueLikeRenderer(h, toOpts) {
-  for (let guard = 0; guard < 50; guard++) {
-    const q = await h.invoke("queue-get");
-    const item = q.find(i => i.status === "pending");
-    if (!item) return;
-    await h.invoke("queue-update-item", { id: item.id, status: "running" });
-    let r;
-    try { r = await h.invoke("download", toOpts(item)); } catch (e) { r = { ok: false, error: String(e) }; }
-    let status = "error", error = null;
-    if (r.ok) status = "done";
-    else if (r.canceled) status = "canceled";
-    else if (r.duplicate || r.skipped) status = "skipped";
-    else error = r.error || "download failed";
-    await h.invoke("queue-update-item", { id: item.id, status, error });
+// Calls the production main-owned runner (queue-start), not a copied renderer loop.
+async function runQueueLikeRenderer(h) {
+  await h.invoke("queue-start");
+  const end = Date.now() + 8000;
+  while (Date.now() < end) {
+    const st = await h.invoke("queue-status");
+    if (!st.running) return;
+    await new Promise((r) => setTimeout(r, 15));
   }
   throw new Error("queue did not drain");
 }
-const toOpts = (item) => ({
-  url: item.url, type: item.playlist ? "playlist" : "video", quality: "best", autoTag: false, _inQueue: true,
-  ...(item.playlistItems ? { playlistItems: item.playlistItems } : {}),
-});
 
 test("invalid persisted queue items error out individually; later valid items still run", async () => {
   await withHarness({}, async (h) => {
@@ -346,7 +333,7 @@ test("invalid persisted queue items error out individually; later valid items st
       { id: "7", url: good, status: "done" },
     ];
     fs.writeFileSync(path.join(h.userData, "queue.json"), JSON.stringify(stored));
-    await runQueueLikeRenderer(h, toOpts);
+    await runQueueLikeRenderer(h);
     const after = await h.invoke("queue-get");
     assert.deepEqual(after.map(i => i.status), ["error", "error", "error", "error", "error", "done", "done"]);
     for (const i of after.slice(0, 5)) assert.match(i.error, /^(Invalid link|No link provided)/);
@@ -377,12 +364,12 @@ test("retry of a failed valid item still works", async () => {
     const url = "https://example.com/retry";
     await h.invoke("queue-add", [{ url, type: "audio" }]);
     h.setScript(() => ({ code: 1, stderr: "ERROR: network down" }));
-    await runQueueLikeRenderer(h, toOpts);
+    await runQueueLikeRenderer(h);
     let q = await h.invoke("queue-get");
     assert.equal(q[0].status, "error");
     h.setScript(null);
     await h.invoke("queue-update-item", { id: q[0].id, status: "pending", error: null, note: null, force: false });
-    await runQueueLikeRenderer(h, toOpts);
+    await runQueueLikeRenderer(h);
     q = await h.invoke("queue-get");
     assert.equal(q[0].status, "done");
     assert.ok(h.ytdlpCalls().every(c => c.args.slice(-2).join("|") === "--|" + url));
@@ -401,11 +388,11 @@ test("watch-folder: filtered lines enqueue as before; one that slips through the
     const q = await h.invoke("queue-get");
     assert.deepEqual(q.map(i => i.url), ["https://example.com/a?x=1", "https://example.com/b", "https://", "https://example.com/d#frag"]);
     assert.ok(q.every(i => i.source === "watch" && i.status === "pending"));
-    await runQueueLikeRenderer(h, toOpts);
+    await runQueueLikeRenderer(h);
     const after = await h.invoke("queue-get");
     assert.deepEqual(after.map(i => i.status), ["done", "done", "error", "done"]);
     assert.match(after[2].error, /^Invalid link/);
-    assert.deepEqual(h.ytdlpCalls().map(c => c.args.at(-1)),
+    assert.deepEqual(h.ytdlpCalls().filter(c => c.args.includes("-o")).map(c => c.args.at(-1)),
       ["https://example.com/a?x=1", "https://example.com/b", "https://example.com/d#frag"]);
     await h.invoke("watch-stop");
   });
