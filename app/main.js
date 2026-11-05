@@ -1025,6 +1025,8 @@ function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdate
       // once WITHOUT cookies so public downloads still work; login-required ones
       // will then fail with a clear "needs cookies" hint instead of this.
       if (!noCookieRetry && args.includes("--cookies-from-browser") && isCookieStoreError(stderr)) {
+        if (onProgress) onProgress({ phase: "retry", reason: "cookies_store" });
+        status("Retrying without browser cookies…");
         return resolve(runYtdlp(stripCookieArgs(args), onProgress, plTotal, true, noUpdateRetry));
       }
       // "403 Forbidden" / "format not available" on a link that plays fine in a
@@ -1032,6 +1034,7 @@ function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdate
       // doesn't know about yet. Update the engine and retry the download ONCE
       // before showing the user an error they can't act on.
       if (!noUpdateRetry && isStaleEngineError(stderr)) {
+        if (onProgress) onProgress({ phase: "engine-update", reason: "engine_stale" });
         status("Updating the download engine…");
         return resolve(
           forceUpdateYtdlp().then((updated) => {
@@ -1041,7 +1044,10 @@ function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdate
           })
         );
       }
-      reject(new Error(full));
+      const fail = new Error(full);
+      if (noCookieRetry) fail.retryKind = "cookies_store";
+      else if (noUpdateRetry) fail.retryKind = "engine_stale";
+      reject(fail);
     });
   });
 }
@@ -1083,6 +1089,7 @@ function ytdlpJson(args, noCookieRetry = false) {
     c.on("close", (code) => {
       if (buf.trim()) return resolve(buf);
       if (!noCookieRetry && args.includes("--cookies-from-browser") && isCookieStoreError(err)) {
+        status("Retrying without browser cookies…");
         return resolve(ytdlpJson(stripCookieArgs(args), true));
       }
       reject(new Error(err.trim() || ("yt-dlp exited " + code)));
@@ -1093,6 +1100,14 @@ function ytdlpJson(args, noCookieRetry = false) {
 // Turn yt-dlp's raw failure into a flag the UI can act on (offer the cookie fix).
 function isCookieError(msg) {
   return /sign in to confirm your age|confirm you'?re not a bot|--cookies|cookies-from-browser|age-restricted|inappropriate for some users/i.test(msg || "");
+}
+function errorInfo(msg, extra = {}) {
+  if (isCookieError(msg)) return { code: "cookies_needed", needsCookies: true, retryKind: extra.retryKind || null };
+  if (isCookieStoreError(msg)) return { code: "cookies_store", needsCookies: false, retryKind: extra.retryKind || "cookies_store" };
+  if (isStaleEngineError(msg)) return { code: "engine_stale", needsCookies: false, retryKind: extra.retryKind || "engine_stale" };
+  if (/unsupported url/i.test(msg || "")) return { code: "unsupported_url", needsCookies: false, retryKind: extra.retryKind || null };
+  if (/timed out|connection lost|econnreset|enotfound/i.test(msg || "")) return { code: "network", needsCookies: false, retryKind: extra.retryKind || null };
+  return { code: "unknown", needsCookies: false, retryKind: extra.retryKind || null };
 }
 
 // Every URL that reaches yt-dlp (info, playlist fetch, download) goes through
@@ -1871,7 +1886,8 @@ ipcMain.handle("download", async (_e, opts) => {
       cleanPartials(outDir);
       return { ok: false, canceled: true };
     }
-    return { ok: false, error: e.message, needsCookies: isCookieError(e.message) };
+    const info = errorInfo(e.message, { retryKind: e.retryKind });
+    return { ok: false, error: e.message, errorCode: info.code, needsCookies: info.needsCookies, retryKind: info.retryKind };
   } finally {
     cancelRequested = false;
   }

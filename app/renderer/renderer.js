@@ -159,6 +159,8 @@ const I18N = {
     downloading_label: "Descargando", queue_waiting: "{n} en espera",
     cancel_dl: "Cancelar", cancel_dl_title: "Detener esta descarga y pasar a la siguiente de la cola",
     stop_all: "Detener todo", stop_all_title: "Detener esta descarga y cancelar todo lo que está en espera",
+    retry_no_cookies: "Reintentando sin cookies del navegador…",
+    retry_engine_update: "Actualizando el motor de descarga…",
     canceling: "Cancelando…",
     canceled_msg: "Descarga cancelada",
     canceled_all_msg: "Detenido — {n} en espera cancelada(s)",
@@ -318,6 +320,8 @@ const I18N = {
     downloading_label: "Downloading", queue_waiting: "{n} waiting",
     cancel_dl: "Cancel", cancel_dl_title: "Stop this download and move on to the next queued link",
     stop_all: "Stop all", stop_all_title: "Stop this download and cancel everything still waiting",
+    retry_no_cookies: "Retrying without browser cookies…",
+    retry_engine_update: "Updating the download engine…",
     canceling: "Cancelling…",
     canceled_msg: "Download cancelled",
     canceled_all_msg: "Stopped — {n} waiting item(s) cancelled",
@@ -440,12 +444,18 @@ api.onProgress((p) => {
   // Drive the prominent "Downloading" card on the Download tab.
   $("dlActive").style.display = "block";
   const bar = $("dlActiveBar");
-  if (phase === "normalizing") {
+  if (phase === "normalizing" || phase === "retry" || phase === "engine-update") {
     bar.classList.add("indet");
     $("dlActiveFill").style.width = ""; $("dlActiveFill").style.marginLeft = "";
     $("dlActivePct").textContent = "";
-    $("dlActivePhase").textContent = t("normalizing_phase");
+    $("dlActivePhase").textContent = phase === "retry" ? t("retry_no_cookies")
+      : phase === "engine-update" ? t("retry_engine_update")
+      : t("normalizing_phase");
     $("dlActiveSpeed").textContent = ""; $("dlActiveEta").textContent = "";
+    if (phase === "retry" || phase === "engine-update") {
+      const msg = $("msg");
+      if (msg) { msg.className = ""; msg.textContent = $("dlActivePhase").textContent; }
+    }
     return;
   }
   const n = Number(pct);

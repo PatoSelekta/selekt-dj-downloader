@@ -303,7 +303,7 @@ test("existing success/failure response shapes are unchanged", async () => {
     assert.deepEqual(Object.keys(dl).sort(), ["count", "files", "folder", "ok"]);
     h.setScript(() => ({ code: 1, stderr: "ERROR: boom" }));
     const bad = await h.invoke("download", { url, type: "video", autoTag: false });
-    assert.deepEqual(bad, { ok: false, error: "ERROR: boom", needsCookies: false });
+    assert.deepEqual(bad, { ok: false, error: "ERROR: boom", needsCookies: false, errorCode: "unknown", retryKind: null });
   });
 });
 
