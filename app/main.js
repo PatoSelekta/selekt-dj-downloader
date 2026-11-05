@@ -48,10 +48,18 @@ function loadConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")); }
   catch { return {}; }
 }
-function saveConfig(cfg) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+function writeJsonAtomic(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + "." + randomUUID() + ".tmp";
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
 }
+function saveConfig(cfg) { writeJsonAtomic(CONFIG_FILE, cfg); }
 // ---------------------------------------------------------------------------
 // Defaults for a fresh configuration
 //  - A key that is ABSENT from config.json was never saved: the default below applies.
@@ -315,13 +323,12 @@ function readHistory(limit = 50, contains = null) {
 // Feature 1 — Queue helpers
 // ---------------------------------------------------------------------------
 function loadQueue() {
-  try { return JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8")); }
-  catch { return []; }
+  try {
+    const v = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
 }
-function saveQueue(q) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(QUEUE_FILE, JSON.stringify(q, null, 2));
-}
+function saveQueue(q) { writeJsonAtomic(QUEUE_FILE, Array.isArray(q) ? q : []); }
 
 ipcMain.handle("queue-get", () => loadQueue());
 
