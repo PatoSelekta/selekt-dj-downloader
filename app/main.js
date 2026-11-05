@@ -11,7 +11,7 @@ const fs = require("fs");
 const os = require("os");
 const https = require("https");
 const { spawn } = require("child_process");
-const { randomUUID } = require("crypto");
+const { randomUUID, createHash } = require("crypto");
 
 const ffmpegStatic = require("ffmpeg-static");
 const ffprobeStatic = require("ffprobe-static");
@@ -664,7 +664,18 @@ const YTDLP_VARIANT = "standalone-1";   // bump to force a one-time re-download
 function ytdlpAssetName() {
   if (process.platform === "win32") return "yt-dlp.exe";
   if (process.platform === "darwin") return "yt-dlp_macos";   // universal, bundles Python
-  return "yt-dlp_linux";                                       // bundles Python
+  return process.arch === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
+}
+
+function sha256File(p) {
+  return createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+}
+function parseSha256Sums(text, asset) {
+  for (const line of String(text).split("\n")) {
+    const m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(\S+)$/);
+    if (m && m[2] === asset) return m[1].toLowerCase();
+  }
+  return null;
 }
 
 // Download limits. The stall limit is a socket-idle timeout (no bytes for this long = dead
@@ -773,9 +784,51 @@ function downloadYtdlp() {
   if (!ytdlpInstall) {
     ytdlpInstall = (async () => {
       sweepStaleYtdlpParts();
-      const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytdlpAssetName()}`;
-      await downloadTo(url, YTDLP_PATH, { minBytes: YTDLP_MIN_BYTES, mode: process.platform === "win32" ? null : 0o755 });
-      try { fs.writeFileSync(YTDLP_VARIANT_FILE, YTDLP_VARIANT); } catch (_) {}
+      const tag = await latestYtdlpTag();
+      if (!tag) throw new Error("Could not determine yt-dlp release");
+      const asset = ytdlpAssetName();
+      const tagged = `https://github.com/yt-dlp/yt-dlp/releases/download/${encodeURIComponent(tag)}`;
+      const sumsUrl = `${tagged}/SHA2-256SUMS`;
+      const assetUrl = `${tagged}/${asset}`;
+
+      const sumsDest = path.join(BIN_DIR, "SHA2-256SUMS." + randomUUID() + ".tmp");
+      let expectedHash = null;
+      let sumsPresent = false;
+      try {
+        await downloadTo(sumsUrl, sumsDest, { minBytes: 32 });
+        sumsPresent = true;
+        expectedHash = parseSha256Sums(fs.readFileSync(sumsDest, "utf8"), asset);
+      } catch (e) {
+        if (!/HTTP 404/.test(e.message || "")) throw e;
+        // Sums file missing: size-floor install of this same tag only (not /latest/download/).
+      } finally {
+        try { fs.unlinkSync(sumsDest); } catch (_) {}
+      }
+      if (sumsPresent && !expectedHash) throw new Error("Checksum missing for " + asset);
+
+      const staged = YTDLP_PATH + "." + randomUUID() + ".new";
+      const bak = YTDLP_PATH + ".bak";
+      try {
+        await downloadTo(assetUrl, staged, { minBytes: YTDLP_MIN_BYTES, mode: process.platform === "win32" ? null : 0o755 });
+        if (expectedHash && sha256File(staged) !== expectedHash) throw new Error("Checksum mismatch");
+        if (fs.existsSync(YTDLP_PATH)) {
+          try { fs.unlinkSync(bak); } catch (_) {}
+          fs.renameSync(YTDLP_PATH, bak);
+        }
+        try {
+          fs.renameSync(staged, YTDLP_PATH);
+          if (expectedHash && sha256File(YTDLP_PATH) !== expectedHash) throw new Error("Checksum mismatch");
+          try { fs.writeFileSync(YTDLP_VARIANT_FILE, YTDLP_VARIANT); } catch (_) {}
+        } catch (e) {
+          if (fs.existsSync(bak)) {
+            try { fs.unlinkSync(YTDLP_PATH); } catch (_) {}
+            try { fs.renameSync(bak, YTDLP_PATH); } catch (_) {}
+          }
+          throw e;
+        }
+      } finally {
+        try { fs.unlinkSync(staged); } catch (_) {}
+      }
     })().finally(() => { ytdlpInstall = null; });
   }
   return ytdlpInstall;

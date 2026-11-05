@@ -32,7 +32,16 @@ function fakeNet(onGet) {
         process.nextTick(() => cb(res)); return res; } }));
       return req;
     },
-    request() { net.heads++; throw new Error("unexpected HEAD in test"); },
+    request(_opts, cb) {
+      net.heads++;
+      const req = new EventEmitter();
+      req.setTimeout = () => req; req.destroy = () => {};
+      req.end = () => process.nextTick(() => cb({
+        headers: { location: "https://github.com/yt-dlp/yt-dlp/releases/tag/2099.01.01" },
+        resume() {},
+      }));
+      return req;
+    },
   };
   return net;
 }
@@ -85,7 +94,7 @@ test("setup FAILURE before the renderer loads is delivered as the error, never a
     assert.equal(seen.length, 1);
     assert.equal(seen[0], "Could not download yt-dlp: HTTP 404");
     assert.ok(!statuses(h).includes("Ready."), "Ready. was never sent");
-    assert.equal(net.gets, 1, "one attempt at launch; replay did not retry");
+    assert.equal(net.gets, 2, "sums 404 then tagged binary 404; replay did not retry");
   } finally { h.close(); }
 });
 
