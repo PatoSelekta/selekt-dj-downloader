@@ -56,7 +56,7 @@
 - Consumes: existing `CONFIG_FILE`, `QUEUE_FILE`, `DATA_DIR`
 - Produces: `writeJsonAtomic(file, value)` — writes UTF-8 JSON with pretty-print 2 spaces to `file.<uuid>.tmp`, `fs.renameSync` onto `file`. `loadQueue()`: if parse result is not an Array, return `[]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `app/test/p1-atomic-persist.test.js`:
 
@@ -117,13 +117,13 @@ test("config.json is written atomically (failed rename keeps previous bytes)", T
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test app/test/p1-atomic-persist.test.js`
 
 Expected: FAIL — `queue-set` currently swallows write errors / uses in-place `writeFileSync`, so rename is never called and the reject assertion fails; non-array JSON currently throws or returns the object.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `app/main.js` replace `saveConfig` / `saveQueue` with:
 
@@ -151,13 +151,13 @@ function loadQueue() {
 
 `queue-set` / `queue-update-item` / `queue-clear` currently return `{ ok: true }` even on throw. Let the throw surface (harness invoke rejects). Wrap `queue-set` so a throw rejects the IPC promise (default).
 
-- [ ] **Step 4: Run the tests and the full suite**
+- [x] **Step 4: Run the tests and the full suite**
 
 Run: `node --test app/test/p1-atomic-persist.test.js app/test/*.test.js`
 
 Expected: new tests PASS; 193 existing still PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/main.js app/test/p1-atomic-persist.test.js
@@ -186,7 +186,7 @@ git commit -m "fix: atomic config/queue writes; reject non-array queue.json"
 - Before engine retry, existing status plus `onProgress({ phase: "engine-update", reason: "engine_stale" })`.
 - `ytdlpJson` cookie retry also emits setup-status `Retrying without browser cookies…` (info probe has no download-progress).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```javascript
 "use strict";
@@ -246,25 +246,25 @@ test("sign-in error after cookie retry returns errorCode cookies_needed (not a s
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test app/test/p1-errors-retries.test.js`
 
 Expected: FAIL — retry exists but no `download-progress` `{ phase: "retry" }`; failure has `needsCookies` but no `errorCode`.
 
-- [ ] **Step 3: Minimal implementation**
+- [x] **Step 3: Minimal implementation**
 
 Add `errorInfo` next to `isCookieError`. In `runYtdlp` cookie-store branch, emit progress then recurse. In download `catch`, attach `errorCode` / `retryKind`.
 
 Renderer `api.onProgress`: if `p.phase === "retry"` set `$("dlActivePhase")` / `$("msg")` to a new i18n key `retry_no_cookies` (ES+EN). Do not redesign layout.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 `node --test app/test/p1-errors-retries.test.js app/test/*.test.js`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/main.js app/preload.js app/renderer/renderer.js app/test/p1-errors-retries.test.js
@@ -288,7 +288,7 @@ git commit -m "feat: visible cookie/engine retries and stable error codes"
 - `const { randomUUID, createHash } = require("crypto");`
 - Update h4 `downloadTo` caller-count guard: definition + sums + binary (3).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 In `app/test/p1-engine-verify.test.js`, using h4's net pattern (copy `makeNet`/`serve`/`BODY`/`firstInstall` locally or extract later — **copy the helpers into this file** so h4 stays readable; do not invent a second downloader):
 
@@ -301,13 +301,13 @@ Also update `h4-engine-reliability.test.js` `net.handler` so GET of `SHA2-256SUM
 
 If tag is null, first install should fail with a clear error (`Could not determine yt-dlp release`), not fetch `/latest/download/` unverified. **Update h4 tests** that assumed one GET.
 
-- [ ] **Step 2: Run to verify fail**
+- [x] **Step 2: Run to verify fail**
 
 `node --test app/test/p1-engine-verify.test.js app/test/h4-engine-reliability.test.js`
 
 Expected: FAIL checksum tests; h4 first-install may still pass until downloadYtdlp changes — write p1 tests first, watch them fail, then implement, then fix h4.
 
-- [ ] **Step 3: Implement downloadYtdlp verification**
+- [x] **Step 3: Implement downloadYtdlp verification**
 
 Parse sums with:
 
@@ -324,11 +324,11 @@ function parseSha256Sums(text, asset) {
 }
 ```
 
-- [ ] **Step 4: Run h4 + p1 + full suite**
+- [x] **Step 4: Run h4 + p1 + full suite**
 
 Expected: all PASS. Do not claim GitHub authenticity beyond “bytes match published SHA2-256SUMS”.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/main.js app/test/p1-engine-verify.test.js app/test/h4-engine-reliability.test.js
@@ -350,17 +350,17 @@ git commit -m "feat: verify yt-dlp SHA-256 and keep previous binary for rollback
 - If parent exists, leaf mkdir remains allowed (deleted folder on a still-mounted volume / new subfolder).
 - `mkdir` EACCES/EPERM on a favorite maps to `dest_unmounted` (do not throw raw).
 
-- [ ] **Step 1: Change the existing “EXISTING BEHAVIOR” test to the new contract** (this is the failing test):
+- [x] **Step 1: Change the existing “EXISTING BEHAVIOR” test to the new contract** (this is the failing test):
 
 Replace the writable-parent test body so `r.ok === false`, `r.errorCode === "dest_unmounted"`, `fs.existsSync(path.join(mountRoot,"USB")) === false`, `h.ytdlpCalls().length === 0`.
 
 Add: subfolder under main (parent exists) still creates. Registered favorite whose leaf is missing but parent exists still creates.
 
-- [ ] **Step 2: Run `node --test app/test/favorite-unplugged-drive.test.js`**
+- [x] **Step 2: Run `node --test app/test/favorite-unplugged-drive.test.js`**
 
 Expected: FAIL on the old “silently re-creates” assertion until production changes.
 
-- [ ] **Step 3: Implement check in `download` after `resolveDestination`, before `mkdirSync`:**
+- [x] **Step 3: Implement check in `download` after `resolveDestination`, before `mkdirSync`:**
 
 ```javascript
 function missingMountChain(dir) {
@@ -372,9 +372,9 @@ If `opts.targetPath` and `missingMountChain(dest.dir)` return `{ ok:false, error
 
 Catch mkdir EACCES/EPERM → same code.
 
-- [ ] **Step 4: Full suite**
+- [x] **Step 4: Full suite**
 
-- [ ] **Step 5: Commit** `fix: refuse downloads into unmounted favorite paths`
+- [x] **Step 5: Commit** `fix: refuse downloads into unmounted favorite paths`
 
 ---
 
@@ -395,7 +395,7 @@ Catch mkdir EACCES/EPERM → same code.
 
 Allowed format values: `audio:mp3|audio:m4a|audio:wav|audio:flac|video:original|video:1080|video:720|video:best`.
 
-- [ ] **Step 1: Tests in defaults.test.js**
+- [x] **Step 1: Tests in defaults.test.js**
 
 ```javascript
 test("absent audio_format/audio_bitrate: get-settings reports null saved keys; Download tab defaults stay MP3/320", ...);
@@ -403,13 +403,13 @@ test("set-audio-format + set-audio-bitrate round-trip in config.json and get-set
 test("get-settings does not write audio_format into an empty config", ...);
 ```
 
-- [ ] **Step 2: Run, expect FAIL (no IPC)**
+- [x] **Step 2: Run, expect FAIL (no IPC)**
 
-- [ ] **Step 3: Implement IPC + renderer apply/save**
+- [x] **Step 3: Implement IPC + renderer apply/save**
 
-- [ ] **Step 4: Suite**
+- [x] **Step 4: Suite**
 
-- [ ] **Step 5: Commit** `feat: persist last format and bitrate after the user changes them`
+- [x] **Step 5: Commit** `feat: persist last format and bitrate after the user changes them`
 
 ---
 
@@ -427,7 +427,7 @@ test("get-settings does not write audio_format into an empty config", ...);
 - Result includes `encodePlan`. Queue runner will persist it on the item (Task 8).
 - Normalize on → always `convert`.
 
-- [ ] **Step 1: Tests**
+- [x] **Step 1: Tests**
 
 ```javascript
 test("Normalize off + mp3 source abr 320 + target mp3/320: yt-dlp has no --audio-quality; no libmp3lame spawn");
@@ -438,13 +438,13 @@ test("source abr 128 to mp3 320: convert + encodePlan.upsampleWarn true");
 
 Stub probe JSON `formats: [{ acodec:"mp3", abr:320, vcodec:"none" }]`.
 
-- [ ] **Step 2: Fail (always --audio-quality 320K)**
+- [x] **Step 2: Fail (always --audio-quality 320K)**
 
-- [ ] **Step 3: Implement planEncode; use it in download**
+- [x] **Step 3: Implement planEncode; use it in download**
 
-- [ ] **Step 4: Suite**
+- [x] **Step 4: Suite**
 
-- [ ] **Step 5: Commit** `feat: copy matching audio; warn when the source bitrate is lower`
+- [x] **Step 5: Commit** `feat: copy matching audio; warn when the source bitrate is lower`
 
 ---
 
@@ -471,15 +471,15 @@ New tests:
 - tmp measure `input_i: -12.9, input_tp: -1.5` with target -9 → file is NORMALIZED, warning `target_miss`
 - tag ffmpeg exit 1 → `tagWarning` present, file still kept
 
-- [ ] **Step 1: Write p1-loudnorm-gate tests; update normalize-warning harness so existing success still has a passing tmp-measure** — if you update the harness first without gate code, extra ffmpeg calls may already happen… **Order:** add p1 tests (fail: no true_peak reason). Then implement gate. Then fix normalize-warning stub for the extra measure.
+- [x] **Step 1: Write p1-loudnorm-gate tests; update normalize-warning harness so existing success still has a passing tmp-measure** — if you update the harness first without gate code, extra ffmpeg calls may already happen… **Order:** add p1 tests (fail: no true_peak reason). Then implement gate. Then fix normalize-warning stub for the extra measure.
 
-- [ ] **Step 2: Watch p1 tests fail**
+- [x] **Step 2: Watch p1 tests fail**
 
-- [ ] **Step 3: Implement gate + tagWarning**
+- [x] **Step 3: Implement gate + tagWarning**
 
-- [ ] **Step 4: `node --test app/test/normalize-warning.test.js app/test/p1-loudnorm-gate.test.js app/test/*.test.js`**
+- [x] **Step 4: `node --test app/test/normalize-warning.test.js app/test/p1-loudnorm-gate.test.js app/test/*.test.js`**
 
-- [ ] **Step 5: Commit** `feat: validate loudnorm true peak before swap; report tag failures`
+- [x] **Step 5: Commit** `feat: validate loudnorm true peak before swap; report tag failures`
 
 Optional: if `ffmpeg` exists on PATH, add `app/test/p1-loudnorm-gate.ffmpeg.test.js` that writes a generated sine with `ffmpeg` and runs `loudnormTwoPass` via harness with **real** ffmpeg by not stubbing that spawn — only if it does not break isolation. If too invasive, skip and note “generated ffmpeg check not wired; stubs cover gate”. Prefer a small script in the test that calls system ffmpeg to produce JSON numbers documenting the gate math, skipped when ffmpeg missing (`test(..., { skip: !ffmpeg })`).
 
@@ -511,7 +511,7 @@ Optional: if `ffmpeg` exists on PATH, add `app/test/p1-loudnorm-gate.ffmpeg.test
 - Persist additive fields on the item when done: `files`, `outputDir`, `errorCode`, `encodePlan`, `normalize`.
 - Fingerprint path unchanged (`_inQueue` still true).
 
-- [ ] **Step 1: Tests in p1-queue-runner.test.js using REAL `queue-start`:**
+- [x] **Step 1: Tests in p1-queue-runner.test.js using REAL `queue-start`:**
 
 ```javascript
 test("queue-start runs pending items via production download; 1.1.0 array shape still works");
@@ -528,9 +528,9 @@ For reload: `withWindow:true`, start a download that waits (child not closed unt
 
 Harness `fakeChild` currently closes immediately. **Extend h3-harness** with `setScript` returning `{ hang: true }` that does not emit `close` until `h.releaseHang()`. This is required to test reload-during-run. Implement hang support in the **test harness only**.
 
-- [ ] **Step 2: Run p1-queue-runner — FAIL (no queue-start)**
+- [x] **Step 2: Run p1-queue-runner — FAIL (no queue-start)**
 
-- [ ] **Step 3: Implement runner + harness hang + replace `runQueueLikeRenderer`:**
+- [x] **Step 3: Implement runner + harness hang + replace `runQueueLikeRenderer`:**
 
 ```javascript
 async function runQueueLikeRenderer(h) {
@@ -547,9 +547,9 @@ async function runQueueLikeRenderer(h) {
 
 Update h1 reachability: `await api.download` count is **1** (runDownload only). `_inQueue: true` appears in **main.js**. Keep `runDownload`/`dupForce` cycle as dead path.
 
-- [ ] **Step 4: Full suite including h2, h3-destinations, watch-destination, h3-corrections**
+- [x] **Step 4: Full suite including h2, h3-destinations, watch-destination, h3-corrections**
 
-- [ ] **Step 5: Commit** `feat: run the download queue in the main process`
+- [x] **Step 5: Commit** `feat: run the download queue in the main process`
 
 ---
 
@@ -562,13 +562,13 @@ Update h1 reachability: `await api.download` count is **1** (runDownload only). 
 - Modify: `THIRD_PARTY_INVENTORY.md` (checksum now performed; still not a signature)
 - Test: run full `node --test app/test/*.test.js`; if Electron present, `a11y-check.electron.js`; if ffmpeg present, optional generated-tone measure
 
-- [ ] **Step 1: Update docs to match implemented behavior only**
+- [x] **Step 1: Update docs to match implemented behavior only**
 
-- [ ] **Step 2: Run full tests; record counts**
+- [x] **Step 2: Run full tests; record counts**
 
-- [ ] **Step 3: Commit** `docs: record Phase 1 reliability and audio-safety behavior`
+- [x] **Step 3: Commit** `docs: record Phase 1 reliability and audio-safety behavior`
 
-- [ ] **Step 4: Push branch and update PR body with evidence and limitations**
+- [x] **Step 4: Push branch and update PR body with evidence and limitations**
 
 Do not merge.
 

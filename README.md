@@ -23,7 +23,8 @@ audio or video into folders you organise yourself (one per genre, gig or project
 - **Download audio or video** from a pasted link: MP3 or M4A (128, 192 or 320 kbps), WAV or FLAC for audio; Original, 1080p, 720p or Best for video.
 - **Folders for your library.** Pick one main folder (it defaults to `~/Downloads` until you choose), create sub-folders, add favourite folders from anywhere (a USB stick, say), and choose the destination with one click.
 - **Safer defaults for DJ use:** MP3, 320 kbps, loudness normalisation on at −14 LUFS, Avoid duplicates on, Auto-tag on, playlist download off.
-- **Queue** for many links at once, with pause, cancel, retry and clear.
+- **Queue** for many links at once, with pause, cancel, retry and clear. The sequential runner lives in the
+  main process (window reload does not duplicate the active item).
 - **Honest warnings:** if loudness normalization is on but cannot be completed, the file is kept at its original loudness and the app says so. Cancelling part-way through a list keeps the finished files and says how many were normalized.
 - **History** of recent downloads with Play, Show in folder and Copy link.
 - **Playlists** with a track picker.
@@ -65,8 +66,9 @@ Step-by-step help is in the [guide](docs/USER_GUIDE.md#steps). This runs the app
 - `npm ci` was run successfully on the review Mac. `npm start` itself was **not** the command used for the
   review run: the app was launched with `./node_modules/.bin/electron .` plus an isolated `--user-data-dir`.
   `npm start` runs the same `electron .`, but that exact command is **not verified**.
-- The first download fetches the yt-dlp engine from GitHub, so you need an internet connection. The app does
-  **not** verify a checksum or signature for that download. Details and a manual check are in the
+- The first download fetches the yt-dlp engine from GitHub, so you need an internet connection. The app
+  verifies the binary's **SHA-256** against that release's `SHA2-256SUMS` file and keeps the previous copy
+  for rollback if the new file is bad. That is **not** a signature check. Details are in the
   [guide](docs/USER_GUIDE.md#first-run-the-download-engine).
 - A clean-Mac, from-scratch run (no pre-existing Node, caches or data) has **not** been done.
 
@@ -96,11 +98,19 @@ Run the unit tests with:
 node --test app/test/*.test.js
 ```
 
-Latest run: **193 of 193 passed**, both natively on macOS 27.0.1 (Apple silicon, Node 26.11.1) and on Linux
-(Node 22.23.4). The count includes the normalization-warning, cancellation, watch-folder-destination, Queue-display and unplugged-drive (mocked) tests. One test file needs Node 20.4 or newer. These
-tests use stand-ins for yt-dlp, ffmpeg and Electron, so they do not prove that real downloads or conversion work.
-Normalization was separately measured with a real ffmpeg on test files; see the
+Latest Linux run (this Phase 1 pass): **228 of 228 passed** (Node 22.23.4, sequential). That count includes
+the older normalization / destination tests plus Phase 1 reliability and audio-safety tests. An earlier Mac
+run of the pre-Phase-1 suite was 193/193 (macOS 27.0.1, Apple silicon, Node 26.11.1). One test file needs
+Node 20.4 or newer. These tests use stand-ins for yt-dlp and Electron, so they do not prove that real downloads
+or conversion work. One generated 1 s sine was measured with real ffmpeg 6.1.1 on Linux for the loudnorm JSON
+gate. Mac packaging/runtime was **not** re-tested (user Mac offline). See the
 [guide](docs/USER_GUIDE.md#if-normalization-fails).
+
+**Phase 1 (reliability / audio safety)** is implemented on this branch: atomic `queue.json` / `config.json`,
+actionable `errorCode` plus visible cookie/engine retries, SHA-256-verified yt-dlp with `.bak` rollback,
+`dest_unmounted` for disconnected favorites, remembered format/bitrate after you change them, copy-when-source
+matches, loudnorm I/TP gate (keep −9 LUFS, no limiter), and a main-owned sequential queue. Fingerprint stays
+flag-only. Intel, signing, presets and UI redesign are **not** in this phase.
 
 **Latest Mac smoke test (a spot check, not a full test).** On the review Mac (Apple silicon) the app was started with a new,
 isolated data folder, and one public-domain Wikimedia 1000 Hz test tone was downloaded through the app window with the

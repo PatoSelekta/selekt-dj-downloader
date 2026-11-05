@@ -1,10 +1,10 @@
 # Selekt DJ Downloader — staged upgrade design
 
-**Status:** design only. No production code in this pass. Do not implement until this document is approved.
+**Status:** design approved; **Phase 1 implemented** on `cursor/staged-upgrade-design-a99c`. Phases 2–5 not started. Do not merge/release/deploy/install from this pass.
 
-**Source verified:** git `b4b8283` = `origin/main`, working tree clean. App version `1.1.0`, Electron `^44.10.2` (lockfile 44.10.2). Installed Mac app is **not** on this Linux VM; claims about the installed bundle come from the user request and in-repo docs, not from inspecting a `.app` here.
+**Source verified:** git `b4b8283` = `origin/main` at design time. App version `1.1.0`, Electron `^44.10.2` (lockfile 44.10.2). Installed Mac app is **not** on this Linux VM and was **not** re-tested (user Mac offline).
 
-**This-VM checks (2026-11-05):** `uname -m` = `x86_64`; Node `v22.23.4`; `node --test app/test/*.test.js` → **193/193 pass**. Electron is not installed in this workspace (`app/node_modules` absent), so `app/test-browser/a11y-check.electron.js` and any `electron-builder` packaging were **not** run. No copyrighted media was fetched.
+**This-VM checks (2026-11-05, after Phase 1):** `uname -m` = `x86_64`; Node `v22.23.4`; `node --test --test-concurrency=1 app/test/*.test.js` → **228/228 pass**. Electron is not installed in this workspace (`app/node_modules` absent), so `app/test-browser/a11y-check.electron.js` and any `electron-builder` packaging were **not** run. ffmpeg 6.1.1 present; one generated 1 s sine measured for loudnorm JSON parseability. No copyrighted media and no user cookies.
 
 ---
 
@@ -285,8 +285,6 @@ Everything else in Phase 1 can follow the recommendations above. These change be
 
 ## 10. Approval gate
 
-Approve this document (or list edits) before any production implementation.
+**Approved** (user 2026-11-05): Approach B; copy when source matches; remember format/bitrate; keep −9 LUFS with honest miss; fingerprint flag-only; Intel deferred to Phase 5.
 
-**First implementation slice after approval:** Phase 1 only (error codes + visible cookie/engine retries, main-owned queue runner, atomic queue, dest-unmounted, encode copy-or-convert, loudnorm I/TP gate, yt-dlp SHA-256 + `.bak`). Then re-read this spec and write an implementation plan.
-
-Not in the first slice: presets, filename preview, fingerprint review sheet, VoiceOver pass, packaging, Intel, signing.
+**Phase 1 implemented.** Remaining: phases 2–5. Not in this slice: presets, filename preview, fingerprint review sheet, VoiceOver pass, packaging, Intel, signing.
