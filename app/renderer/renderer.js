@@ -62,6 +62,7 @@ const I18N = {
     h1_trash_after_dismiss: "El aviso se cerró cuando ya había empezado a mover el archivo a la papelera, así que se movió. Puedes restaurarlo desde la papelera.",
     src_quality: "Fuente",
     lossless_warn: "Esta fuente es solo ~{abr} kbps.\nExportar a {fmt} no añade calidad, solo más peso.\n\n¿Descargar como {fmt} de todas formas?",
+    quality_warn: "Esta fuente es solo ~{abr} kbps.\nExportar a {fmt} no añade calidad, solo más peso.\n\n¿Descargar como {fmt} de todas formas?",
     suggest_prefix: "Sugerencia: carpeta",
     autotag_label: "Tag para DJ software", autotag_btn: "Auto-tag",
     autotag_title: "Añade título, artista, género y origen al archivo descargado",
@@ -223,6 +224,7 @@ const I18N = {
     h1_trash_after_dismiss: "The warning was closed after the move to the trash had already started, so the file was moved. You can restore it from the trash.",
     src_quality: "Source",
     lossless_warn: "This source is only ~{abr} kbps.\nExporting to {fmt} won't add quality — just a bigger file.\n\nDownload as {fmt} anyway?",
+    quality_warn: "This source is only ~{abr} kbps.\nExporting to {fmt} won't add quality — just a bigger file.\n\nDownload as {fmt} anyway?",
     suggest_prefix: "Suggested folder:",
     autotag_label: "Tag for DJ software", autotag_btn: "Auto-tag",
     autotag_title: "Embeds title, artist, genre and source URL into downloaded files",
@@ -1507,11 +1509,13 @@ $("go").onclick = async () => {
   // tracks. Enqueue happens from the picker's Download button.
   if (playlistOn) { await openPlaylistPicker(url); return; }
 
-  // Keep the quick "lossless from a low-bitrate source" sanity confirm at press time.
+  // Keep the quick "source bitrate is lower than the chosen output" sanity confirm at press time.
   const [kind, val] = $("format").value.split(":");
   const lossless = kind === "audio" && (val === "wav" || val === "flac");
-  if (lossless && lastProbe && lastProbe.sourceAbr && lastProbe.sourceAbr < 320) {
-    if (!confirm(t("lossless_warn")
+  const lossy = kind === "audio" && (val === "mp3" || val === "m4a");
+  const chosenBr = parseInt($("bitrate").value, 10) || 320;
+  if ((lossless || lossy) && lastProbe && lastProbe.sourceAbr && lastProbe.sourceAbr < chosenBr) {
+    if (!confirm(t("quality_warn")
       .replace("{abr}", Math.round(lastProbe.sourceAbr))
       .replace("{fmt}", val.toUpperCase())
       .replace("{fmt}", val.toUpperCase()))) return;

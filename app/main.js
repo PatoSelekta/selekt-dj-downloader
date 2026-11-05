@@ -1772,6 +1772,55 @@ async function loudnormTwoPass(file, I = -14, bitrate = null) {
   });
 }
 
+function codecFamily(acodec) {
+  const c = String(acodec || "").toLowerCase();
+  if (!c || c === "none") return "";
+  if (c.includes("mp3")) return "mp3";
+  if (c.includes("aac") || c === "mp4a" || c === "m4a") return "aac";
+  if (c.includes("pcm") || c === "wav") return "pcm";
+  if (c.includes("flac")) return "flac";
+  return c;
+}
+function formatFamily(fmt) {
+  if (fmt === "mp3") return "mp3";
+  if (fmt === "m4a") return "aac";
+  if (fmt === "wav") return "pcm";
+  if (fmt === "flac") return "flac";
+  return String(fmt || "");
+}
+function sourceFromProbe(p) {
+  if (!p) return { sourceAcodec: null, sourceAbr: null };
+  if (p.sourceAcodec != null || p.sourceAbr != null) {
+    return { sourceAcodec: p.sourceAcodec || null, sourceAbr: p.sourceAbr || null };
+  }
+  const fmts = Array.isArray(p.formats) ? p.formats : [];
+  const audio = fmts.filter((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"));
+  const best = audio.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0] || {};
+  return { sourceAcodec: best.acodec || null, sourceAbr: best.abr || null };
+}
+function planEncode({ audioFormat, bitrate, loudnorm, sourceAcodec, sourceAbr }) {
+  const targetFormat = audioFormat;
+  const targetBitrate = parseInt(bitrate, 10) || 0;
+  const srcFam = codecFamily(sourceAcodec);
+  const tgtFam = formatFamily(audioFormat);
+  const lossless = audioFormat === "wav" || audioFormat === "flac";
+  const abr = Number(sourceAbr) || 0;
+  let mode = "convert";
+  if (!loudnorm && srcFam && srcFam === tgtFam) {
+    if (lossless) mode = "copy";
+    else if (abr >= targetBitrate) mode = "copy";
+  }
+  const upsampleWarn = mode === "convert" && !loudnorm && !!srcFam && srcFam === tgtFam && !lossless && abr > 0 && abr < targetBitrate;
+  return {
+    mode,
+    upsampleWarn,
+    sourceAcodec: sourceAcodec || null,
+    sourceAbr: sourceAbr == null ? null : sourceAbr,
+    targetFormat,
+    targetBitrate,
+  };
+}
+
 ipcMain.handle("download", async (_e, opts) => {
   // Validate the link first: nothing below (binary setup, folder creation,
   // probe, process launch) runs for an invalid one.
@@ -1845,8 +1894,18 @@ ipcMain.handle("download", async (_e, opts) => {
   }
 
   const wantAudio = type === "audio" || (isPlaylist && opts.audioOnly);
+  if (wantAudio && !isPlaylist && !probeResult) {
+    try { probeResult = await probeInfo(url); } catch (_) {}
+  }
+  const doLoudnorm = wantAudio && (wantLoudnorm !== undefined ? wantLoudnorm : cfgFlag(loadConfig(), "loudnorm"));
+  const src = sourceFromProbe(probeResult);
+  const encodePlan = wantAudio ? planEncode({
+    audioFormat, bitrate, loudnorm: !!doLoudnorm,
+    sourceAcodec: src.sourceAcodec, sourceAbr: src.sourceAbr,
+  }) : null;
   if (wantAudio) {
-    args.push("-x", "--audio-format", audioFormat, "--audio-quality", `${bitrate}K`);
+    args.push("-x", "--audio-format", audioFormat);
+    if (!encodePlan || encodePlan.mode === "convert") args.push("--audio-quality", `${bitrate}K`);
     // Feature 2: loudnorm is NOT passed to yt-dlp as `--postprocessor-args ffmpeg:-af …`.
     // That flag hits every ffmpeg postprocessor, and when the source stream already
     // matches the target format (SoundCloud MP3 sources, most notably) yt-dlp's
@@ -1978,7 +2037,7 @@ ipcMain.handle("download", async (_e, opts) => {
       }
     }
 
-    return { ok: true, count: files.length, files, folder: outDir, ...(normalizeWarning ? { normalizeWarning } : {}) };
+    return { ok: true, count: files.length, files, folder: outDir, ...(encodePlan ? { encodePlan } : {}), ...(normalizeWarning ? { normalizeWarning } : {}) };
   } catch (e) {
     if (e && e.canceled) {
       cleanPartials(outDir);

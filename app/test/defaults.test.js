@@ -165,10 +165,11 @@ test("explicitly saved OFF (Avoid duplicates, Normalize, Auto-tag): the same tra
       loudnormI: undefined, reencode: undefined, tagged: false });
   });
 });
-test("explicitly saved OFF, with the options the UI sends (autoTag:false): no duplicate probe at all", T, async () => {
+test("explicitly saved OFF, with the options the UI sends (autoTag:false): encode probe runs; no normalize or tag", T, async () => {
   await withConfig((u) => ({ ...musicOnly(u), prevent_duplicates: false, loudnorm: false, auto_tag: false }), async (h) => {
     const o = await download(h, { audioFormat: "mp3", bitrate: "320", autoTag: false, loudnorm: false, lufs: -14 });
-    assert.equal(o.probed, false); assert.equal(o.loudnormI, undefined); assert.equal(o.tagged, false);
+    assert.equal(o.probed, true, "audio downloads probe once so copy-vs-convert can see the source");
+    assert.equal(o.loudnormI, undefined); assert.equal(o.tagged, false);
   });
 });
 test("explicitly saved -9 LUFS is used by a new download", T, async () => {
