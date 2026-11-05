@@ -112,6 +112,14 @@ function checkFolderName(name) {
 }
 function realOrNull(p) { try { return fs.realpathSync.native(p); } catch (_) { return null; } }
 function entryExists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
+function missingMountChain(dir) {
+  return !entryExists(dir) && !entryExists(path.dirname(dir));
+}
+const DEST_UNMOUNTED = {
+  ok: false,
+  error: "That folder is on a drive that is not available. Reconnect it or choose another.",
+  errorCode: "dest_unmounted",
+};
 function samePath(a, b) {
   const x = path.resolve(a), y = path.resolve(b);
   return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
@@ -1742,6 +1750,7 @@ ipcMain.handle("download", async (_e, opts) => {
   // Authorize the destination before anything is set up or created.
   const dest = resolveDestination(opts && opts.targetPath, opts && opts.folder);
   if (!dest.ok) return { ok: false, error: dest.error };
+  if (opts && opts.targetPath && missingMountChain(dest.dir)) return DEST_UNMOUNTED;
   await ensureBinaries();
   const { type = "audio", audioFormat = DEFAULTS.audioFormat, bitrate = DEFAULTS.audioBitrate,
           quality = "best", noConvert = false, folder = "", force = false,
@@ -1753,7 +1762,12 @@ ipcMain.handle("download", async (_e, opts) => {
 
   const isPlaylist = type === "playlist";
   const outDir = dest.dir;
-  fs.mkdirSync(outDir, { recursive: true });
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+  } catch (e) {
+    if (opts && opts.targetPath && (e.code === "EACCES" || e.code === "EPERM")) return DEST_UNMOUNTED;
+    throw e;
+  }
 
   // Fetch info once; reuse for dup-check and tagging (skip for playlists / forced re-downloads).
   let probeResult = _info || null;
