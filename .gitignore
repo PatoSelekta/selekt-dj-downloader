@@ -1,0 +1,44 @@
+# Dependencies and build output
+node_modules/
+dist/
+out/
+
+# Installers and compiled apps (none are part of this repository)
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.AppImage
+*.blockmap
+*.app/
+*.asar
+
+# Backups, caches, OS/editor noise
+*.bak
+*.bak-*
+*.orig
+*.rej
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Credentials, keys, certificates, signing material
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+id_rsa*
+cookies*
+
+# Runtime/user data (belongs in the OS user-data folder, never in the repo)
+*.jsonl
+queue.json
+config.json

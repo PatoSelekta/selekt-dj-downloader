@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Selekt DJ Downloader</title>
+<style>
+  :root{
+    --bg:#0a0a0e;--bg2:#101015;--panel:#16161d;--panel2:#1d1d27;--line:#2a2a36;
+    --text:#f3f4f7;--muted:#9a9aa8;--faint:#6b6b78;--accent:#e50914;--accent2:#ff3b30;--ok:#36d399;
+    --r:15px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1000px 640px at 50% -8%,#16161f,var(--bg));color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.45}
+  .wrap{max-width:860px;margin:0 auto;padding:34px 18px 28px}
+  /* macOS integrated title bar: draggable top strip + clear the traffic lights */
+  .titlebar-drag{position:fixed;top:0;left:0;right:0;height:32px;-webkit-app-region:drag;z-index:1}
+  header.app{-webkit-app-region:drag}
+  header.app .dest,header.app button,header.app #status{-webkit-app-region:no-drag}
+
+  /* ---- persistent header (main folder always visible, compact) ---- */
+  header.app{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--r);padding:11px 14px;margin-bottom:14px}
+  .logo{width:40px;height:40px;border-radius:11px;background:linear-gradient(180deg,#ff3b41,#b40c12);
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;box-shadow:0 6px 16px rgba(229,9,20,.35)}
+  .logo span{width:0;height:0;border-left:13px solid #fff;border-top:8px solid transparent;border-bottom:8px solid transparent;margin-left:4px}
+  /* Header must render identically on every tab. .titles is sized to its content
+     and never shrinks, so the name and tagline can't re-wrap when the window (or
+     a tab's content width) changes. The folder-path chip absorbs the slack — it
+     already truncates with an ellipsis. */
+  .titles{flex:0 0 auto;min-width:0}
+  .titles h1{font-size:17px;margin:0;font-weight:800;letter-spacing:-.01em;white-space:nowrap}
+  .titles p{font-size:12px;color:var(--muted);margin:1px 0 0;white-space:nowrap}
+  header .spacer{flex:1;min-width:8px}
+  .dest{display:flex;align-items:center;gap:9px;background:var(--bg2);border:1px solid var(--line);
+    border-radius:999px;padding:6px 7px 6px 13px;max-width:360px;min-width:0}
+  .dest .lbl{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.08em;white-space:nowrap}
+  .dest .path{font-size:12px;color:var(--text);font-family:ui-monospace,Menlo,monospace;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+  .dest button{background:var(--panel2);border:1px solid var(--line);color:var(--text);font-size:12px;font-weight:600;
+    border-radius:999px;padding:6px 12px;cursor:pointer;min-height:0}
+  .dest button:hover{background:#272731}
+  .langbtn{background:var(--bg2);border:1px solid var(--line);color:var(--text);font-size:12px;font-weight:700;
+    border-radius:999px;padding:7px 13px;cursor:pointer;min-height:0;letter-spacing:.04em}
+  .langbtn:hover{border-color:var(--accent);background:var(--panel2)}
+  #status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap}
+  #status .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+  #statusText{max-width:280px;overflow:hidden;text-overflow:ellipsis}   /* a long setup error must not push the header around */
+
+  /* Because the name + tagline are now locked to one line each, the RIGHT side of
+     the header is what gives way as the window narrows (down to minWidth 720).
+     Order of sacrifice: path length → "SAVING TO" label + status word → dot only.
+     The tagline itself never changes, which is the whole point. */
+  @media (max-width: 1000px){
+    .dest{max-width:290px}
+    .dest .path{max-width:120px}
+  }
+  @media (max-width: 900px){
+    .dest{max-width:210px}
+    .dest .lbl{display:none}
+    .dest .path{max-width:104px}
+  }
+  #status.ready{color:var(--ok)} #status.ready .dot{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+
+  /* ---- tabs ---- */
+  .tabs{display:flex;gap:5px;background:var(--panel);border:1px solid var(--line);border-radius:999px;
+    padding:5px;margin-bottom:15px;width:fit-content}
+  .tab{border:0;background:transparent;color:var(--muted);font-size:14px;font-weight:700;
+    padding:9px 22px;border-radius:999px;cursor:pointer;min-height:0}
+  .tab[aria-selected="true"]{background:var(--accent);color:#fff;box-shadow:0 4px 14px rgba(229,9,20,.4)}
+  .tab:not([aria-selected="true"]):hover{color:var(--text);background:var(--panel2)}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px}
+  .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px}
+  .card h2{font-size:12.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.09em;margin:0 0 14px}
+  .card-head h2{margin:0}
+  label{display:block;font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin:0 0 7px}
+
+  input,select{width:100%;padding:13px 13px;font-size:15px;background:var(--bg2);color:var(--text);
+    border:1px solid var(--line);border-radius:11px;outline:none}
+  input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(229,9,20,.16)}
+  #url{font-size:16px;padding:16px 15px;font-family:ui-monospace,Menlo,monospace}
+  #url::placeholder{color:var(--faint)}
+  .url-row{display:flex;gap:10px;align-items:stretch}
+  .url-row #url{flex:1}
+  .url-row #pasteBtn{flex:0 0 auto;min-height:0;padding:0 20px}
+
+  button{background:var(--accent);color:#fff;border:none;border-radius:11px;padding:0 18px;font-size:14px;
+    font-weight:700;cursor:pointer;min-height:46px;white-space:nowrap}
+  button:hover{background:var(--accent2)} button:disabled{opacity:.5;cursor:default}
+  button.sec{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
+  button.sec:hover{border-color:var(--accent)}
+
+  /* chips = folder selector (one click, color-coded) */
+  .chips{display:flex;flex-wrap:wrap;gap:9px}
+  .chip{display:flex;align-items:center;gap:8px;background:var(--bg2);border:1.5px solid var(--line);
+    border-radius:999px;padding:10px 14px;cursor:pointer;font-size:14px;font-weight:600;color:var(--text);
+    min-height:44px;min-width:158px;max-width:200px}
+  .chip .sw{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+  .chip .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .chip .ext{flex:0 0 auto;font-size:11px;color:var(--faint);opacity:.85}
+  .chip .pin{flex:0 0 auto;font-size:15px;line-height:1;color:var(--faint);opacity:.5;
+    padding:3px 2px;margin:-3px -2px -3px 0;border-radius:7px}
+  .chip .pin.pinned{color:#f5d020;opacity:1}
+  .chip .pin:hover{opacity:1;background:rgba(255,255,255,.08)}
+  .chip:hover{border-color:#3a3a47;background:var(--panel2)}
+  .chip.active{border-color:currentColor;background:color-mix(in srgb,currentColor 62%,#0c0c11);
+    box-shadow:0 4px 16px color-mix(in srgb,currentColor 42%,transparent)}
+  .chip.active .name{color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+  .chip.active .sw{box-shadow:0 0 0 2px rgba(255,255,255,.3)}
+  .chip.active .pin{color:#fff;opacity:.85}
+  .chip.active .pin.pinned{color:#ffe98a;opacity:1}
+  .chip.add{min-width:auto;max-width:none;color:var(--muted);font-weight:700;border-style:dashed;justify-content:center;font-family:inherit;line-height:inherit}
+  /* the selectable part of a folder chip / row is a real button that looks like the old chip body */
+  .chip>.dest-main,.frow>.dest-main{display:flex;align-items:center;gap:inherit;flex:1;min-width:0;align-self:stretch;background:none;border:0;
+    border-radius:inherit;padding:0;margin:0;min-height:0;color:inherit;font:inherit;text-align:left;cursor:inherit}
+  .chip>.dest-main:focus-visible,.frow>.dest-main:focus-visible{outline:none}
+  .chip:has(>.dest-main:focus-visible),.frow:has(>.dest-main:focus-visible){outline:2px solid #fff;outline-offset:2px}
+  .chip .pin:focus-visible,.frow .pin:focus-visible{outline:2px solid #fff;outline-offset:1px;border-radius:4px;opacity:1}
+  .chip .empty{color:var(--faint)}
+
+  /* type-to-filter for the folder list */
+  .dest-filter{position:relative;margin:0 0 11px;max-width:340px}
+  .dest-filter .ff-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);
+    color:var(--faint);font-size:16px;pointer-events:none;line-height:1}
+  .dest-filter input{width:100%;padding:11px 38px 11px 36px;font-size:14px;border-radius:11px}
+  .dest-filter .ff-clear{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+    background:var(--panel2)!important;border:1px solid var(--line)!important;color:var(--muted);
+    min-height:0!important;padding:4px 9px;font-size:12px;border-radius:8px;box-shadow:none!important}
+  .dest-filter .ff-clear:hover{color:var(--text);border-color:var(--accent)!important}
+  .chips .no-match{color:var(--faint);font-size:13px;padding:10px 2px}
+
+  /* folder section header + view toggle */
+  .folder-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}
+  .folder-head label{margin:0}
+  .folder-head-tools{display:flex;gap:8px;flex:0 0 auto}
+  .view-toggle{display:flex;gap:3px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:3px;flex:0 0 auto}
+  .view-toggle .vt{min-height:0;padding:5px 12px;font-size:13px;line-height:1;background:transparent;border:0;color:var(--muted);border-radius:999px;font-weight:700;white-space:nowrap}
+  .view-toggle .vt:hover{color:var(--text)}
+  .view-toggle .vt.active{background:var(--accent);color:#fff}
+
+  /* generous safety-net cap — with compact density the list usually fits without scrolling */
+  #folderChips{max-height:46vh;overflow-y:auto;overflow-x:hidden;padding:2px 4px 2px 2px}
+  #folderChips::-webkit-scrollbar{width:9px}
+  #folderChips::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+  #folderChips::-webkit-scrollbar-thumb:hover{background:#3a3a47}
+
+  /* +New / +Add live OUTSIDE the scroll box so they're always reachable */
+  .folder-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:9px}
+
+  /* list view — TWO columns to halve the height */
+  #folderChips.list-view{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;align-content:start}
+  .frow{display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;border:1.5px solid var(--line);
+    border-radius:9px;background:var(--bg2);cursor:pointer;min-height:40px;color:var(--text)}
+  .frow:hover{border-color:#3a3a47;background:var(--panel2)}
+  .frow.active{border-color:currentColor;background:color-mix(in srgb,currentColor 26%,#0c0c11)}
+  .frow.active .frow-name{color:#fff}
+  .frow .sw{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+  .frow-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);font-weight:600}
+  .frow-count{font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums;flex:0 0 auto;white-space:nowrap}
+  .frow .ext{font-size:12px;color:var(--faint);flex:0 0 auto}
+  .frow .pin{flex:0 0 auto;font-size:14px;line-height:1;color:var(--faint);opacity:.55;padding:2px}
+  .frow .pin.pinned{color:#f5d020;opacity:1}
+  .frow .pin:hover{opacity:1}
+  .frow.missing{opacity:.45;cursor:default}
+  .frow.missing:hover{border-color:var(--line);background:var(--bg2)}
+
+  /* ---- COMPACT density: shrink chips & rows so everything fits without scrolling ---- */
+  #folderChips.compact{gap:6px}
+  #folderChips.compact .chip{min-height:32px;min-width:122px;padding:6px 11px;font-size:13px;gap:7px}
+  #folderChips.compact .chip .pin{font-size:13px}
+  #folderChips.compact.list-view{gap:4px}
+  #folderChips.compact .frow{min-height:31px;padding:5px 11px;gap:9px}
+  #folderChips.compact .frow-name{font-size:13px}
+  /* single column on narrow windows so 2-col list never gets cramped */
+  @media (max-width:680px){ #folderChips.list-view{grid-template-columns:1fr} }
+
+  .row{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;margin-top:18px}
+  .row>div{min-width:150px}
+  .row .grow{flex:1}
+
+  button.toggle{background:var(--bg2);border:1px solid var(--line);color:var(--text);width:100%;
+    display:flex;align-items:center;justify-content:center;gap:9px}
+  button.toggle:hover{border-color:var(--accent)}
+  button.toggle .sw{width:40px;height:24px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);position:relative;transition:.18s;flex:0 0 40px}
+  button.toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#cfd3da;transition:.18s}
+  button.toggle.active{background:var(--bg2);border-color:var(--accent);color:#fff}
+  button.toggle.active .sw{background:var(--accent);border-color:var(--accent)}
+  button.toggle.active .sw::after{left:18px;background:#fff}
+
+  /* compact bottom controls */
+  .settings-row{display:flex;gap:13px;align-items:flex-end;flex-wrap:wrap;margin-top:16px}
+  .settings-row>div{flex:1 1 150px;min-width:140px}
+  .toggles-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:11px}
+  .toggles-row .tg{flex:1 1 165px;min-width:150px}
+  .toggles-row .tg label{margin-bottom:5px}
+  .toggles-row .toggle{min-height:40px;justify-content:flex-start;padding:0 14px;gap:10px}
+  .toggles-row .toggle span:not(.sw){overflow:hidden;white-space:normal;overflow-wrap:anywhere;line-height:1.15;text-align:left}
+
+  .go{display:flex;align-items:center;gap:15px;margin-top:16px}
+  #go{font-size:16px;padding:0 38px;min-height:54px;box-shadow:0 10px 28px rgba(229,9,20,.4)}
+  .go .hint{font-size:12.5px;color:var(--faint)} .go .hint b{color:var(--text)}
+
+  #barWrap{margin-top:20px;display:none}
+  #bar{height:6px;background:var(--panel2);border-radius:6px;overflow:hidden;position:relative}
+  #bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ff3b41,#ff8a3c);transition:width .15s}
+  #dlInfo{display:flex;justify-content:space-between;align-items:center;margin-top:6px;min-height:16px}
+  #dlPct{font-size:12px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+  #dlRight{display:flex;gap:14px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  #dlSpeed{color:var(--ok)}
+  #dlPhase{font-size:12px;color:var(--muted);font-style:italic}
+  #msg{font-size:13.5px;margin-top:12px;min-height:18px}
+  #msg.ok{color:var(--ok)} #msg.err{color:#ff6b6b} #msg.warn{color:#f5a623}
+  .field-err{font-size:13px;color:#ff6b6b;margin-top:6px}
+  input[aria-invalid="true"]{border-color:#ff6b6b}
+
+  /* prominent "now downloading" card */
+  .dl-active{margin-top:14px;background:var(--bg2);border:1.5px solid var(--accent);border-radius:13px;
+    padding:14px 16px;box-shadow:0 6px 22px rgba(229,9,20,.20)}
+  .dl-active-head{display:flex;align-items:center;gap:9px}
+  .dl-active-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:0 0 auto;
+    box-shadow:0 0 9px var(--accent);animation:dlpulse 1.2s ease-in-out infinite}
+  @keyframes dlpulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .dl-active-label{flex:1;font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+  .dl-active-count{flex:0 0 auto;font-size:12px;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-weight:600}
+  /* Cancel / Stop all on the active-download card. Generous hit area (head-mouse
+     friendly) and clearly separated from the big red Download button below. */
+  .dl-stop{flex:0 0 auto;background:transparent;color:#ff8a8a;border:1.5px solid #ff6b6b;
+    border-radius:999px;padding:7px 16px;font-size:12.5px;font-weight:700;cursor:pointer;
+    min-height:32px;line-height:1;transition:background .15s,color .15s}
+  .dl-stop:hover{background:#ff6b6b;color:#fff}
+  .dl-stop:disabled{opacity:.45;cursor:default;background:transparent;color:#ff8a8a}
+  .dl-stop-all{color:var(--muted);border-color:var(--line)}
+  .dl-stop-all:hover{background:var(--line);color:var(--text)}
+  .dl-active-title{font-weight:700;font-size:14.5px;margin:6px 0 10px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dl-active-bar{height:10px;background:var(--panel2);border-radius:6px;overflow:hidden;position:relative}
+  .dl-active-bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ff3b41,#ff8a3c);transition:width .2s}
+  /* indeterminate: a sliding stripe while we have no real % yet */
+  .dl-active-bar.indet>i{width:34%;animation:dlindet 1.15s ease-in-out infinite}
+  @keyframes dlindet{0%{margin-left:-34%}100%{margin-left:100%}}
+  .dl-active-meta{display:flex;gap:14px;margin-top:8px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .dl-active-meta #dlActivePct{font-weight:700;color:var(--text)}
+  .dl-active-meta #dlActiveSpeed{color:var(--ok)}
+  .dl-active-meta #dlActivePhase{font-style:italic}
+
+  /* ---- sticky action dock: destination + Download + live progress, always visible ---- */
+  #tab-dl{padding-bottom:104px}          /* clear the pinned dock at rest */
+  .action-dock{position:fixed;left:0;right:0;bottom:0;z-index:40;
+    background:rgba(16,16,21,.93);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+    border-top:1px solid var(--line);box-shadow:0 -12px 34px rgba(0,0,0,.5)}
+  .dock-inner{max-width:860px;margin:0 auto;padding:12px 18px 14px;max-height:64vh;overflow-y:auto}
+  .dock-inner::-webkit-scrollbar{width:9px}
+  .dock-inner::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+  .dock-action{display:flex;align-items:center;gap:15px}
+  .dock-summary{flex:1;min-width:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    font-size:13px;color:var(--faint)}
+  .dock-summary b{color:var(--text);font-weight:700}
+  .dock-sw{width:11px;height:11px;border-radius:50%;flex:0 0 auto;background:var(--faint);
+    box-shadow:0 0 0 2px rgba(255,255,255,.14)}
+  .dock-dest{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  .dock-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+  .dock-chip{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap;
+    background:var(--panel2);border:1px solid var(--line);color:var(--muted)}
+  .dock-chip.on{border-color:var(--accent);color:#fff;background:color-mix(in srgb,var(--accent) 24%,var(--panel2))}
+  .dock-chip.list{border-color:#f5a623;color:#ffd479;background:rgba(245,166,35,.14)}
+  .action-dock #go{font-size:16px;padding:0 38px;min-height:54px;flex:0 0 auto;
+    box-shadow:0 10px 28px rgba(229,9,20,.4)}
+  /* moved-in progress/warnings sit above the action row and share its top margins */
+  .action-dock #barWrap{margin-top:0;margin-bottom:12px}
+  .action-dock #dlActive{margin-top:0;margin-bottom:12px}
+  .action-dock #msg{margin-top:0;margin-bottom:10px}
+  .action-dock #dupWarning,.action-dock #fpDupWarning{margin-bottom:12px}
+  @media (max-width:560px){
+    .dock-action{flex-wrap:wrap}
+    .action-dock #go{width:100%}
+  }
+
+  /* how-it-works */
+  .how{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;align-items:center;
+    color:var(--faint);font-size:12.5px;margin-top:18px}
+  .how .how-t{color:var(--text);font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:11.5px}
+  .how .step{display:flex;align-items:center;gap:7px}
+  .how .n{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;
+    background:var(--accent);color:#fff;font-size:11px;font-weight:800;flex:0 0 auto}
+  .foot{color:var(--faint);font-size:11.5px;margin-top:12px;text-align:center}
+
+  /* history */
+  .hist .item{display:flex;justify-content:space-between;gap:12px;align-items:center;
+    padding:13px 15px;border:1px solid var(--line);border-radius:12px;background:var(--bg2);margin-bottom:9px}
+  .hist .meta{overflow:hidden;flex:1}
+  .hist .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hist .f{color:var(--faint);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+  .hist .sw{width:10px;height:10px;border-radius:50%;flex:0 0 auto;margin-right:4px}
+  .hist .badge{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+    padding:1px 7px;font-size:11px;color:var(--muted);font-weight:600;margin-right:2px}
+  .hist .empty{color:var(--faint);text-align:center;padding:36px 0}
+  .hist .acts{display:flex;gap:7px;flex:0 0 auto}
+  .hist .item button{min-height:36px;padding:0 14px;font-size:13px}
+
+  /* settings modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .modal-bg.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:18px;width:min(560px,100%);padding:24px;max-height:90vh;overflow:auto}
+  .modal h3{font-size:17px;font-weight:800;margin:0 0 3px}
+  .modal .sub{font-size:13px;color:var(--muted);margin:0 0 16px}
+  .pathbox{display:flex;gap:8px;align-items:center}
+  .pathbox code{flex:1;background:#0a0a0e;border:1px solid var(--line);border-radius:10px;padding:12px 12px;
+    font-size:12.5px;color:#cfcfda;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace}
+  .btns{display:flex;gap:9px;margin-top:11px;flex-wrap:wrap}
+  .mng-list{margin-top:8px} .sect{margin-top:22px}
+  .mng-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .mng-item .sw{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+  .mng-item .mng-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mng-item .mini{min-height:30px;padding:0 12px;font-size:12.5px}
+  .mng-item .mng-rename{flex:1;padding:7px 9px;font-size:14px;border-radius:8px}
+  .mng-empty{color:var(--faint);padding:14px 0}
+  .close-row{display:flex;justify-content:flex-end;margin-top:22px}
+
+  /* playlist track picker */
+  .pl-modal{width:min(640px,100%)}
+  .pl-tools{display:flex;align-items:center;gap:8px;margin:4px 0 10px}
+  .pl-count{margin-left:auto;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .pl-list{max-height:52vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;padding:2px 4px}
+  .pl-item{display:flex;align-items:center;gap:11px;padding:8px 10px;border-bottom:1px solid var(--line);
+    font-size:13.5px;cursor:pointer;margin:0}
+  .pl-item:last-child{border-bottom:0}
+  .pl-item:hover{background:rgba(255,255,255,.02)}
+  .pl-item input{width:17px;height:17px;flex:0 0 auto;cursor:pointer;accent-color:#ff3b41}
+  .pl-idx{color:var(--faint);font-variant-numeric:tabular-nums;width:26px;flex:0 0 auto;text-align:right;font-size:12px}
+  .pl-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+  .pl-dur{color:var(--faint);font-size:12px;flex:0 0 auto;font-variant-numeric:tabular-nums}
+  .pl-item.unavail{opacity:.5;cursor:default}
+  .pl-item.unavail .pl-name{text-decoration:line-through}
+  /* progress mode */
+  .pl-st{flex:0 0 auto;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;min-width:44px;text-align:right}
+  .pl-st.cur{color:#ff8a3c;font-weight:700}
+  .pl-st.done{color:var(--ok);font-weight:700}
+  .pl-st.err{color:#ff6b6b;font-weight:700}
+  .pl-item.active{background:rgba(255,138,60,.10)}
+  .pl-item.done .pl-name{color:var(--muted)}
+  .pl-item.skip{opacity:.4}
+  .pl-status{font-size:13px;color:var(--muted);margin:12px 2px 0;min-height:18px}
+  .pl-status.done-c{color:var(--ok)}
+
+  /* per-track counter on the active-download card */
+  .dl-active-track{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;margin-left:6px}
+
+  /* right-click context menu */
+  #ctxMenu{position:fixed;z-index:200;background:var(--panel2);border:1px solid var(--line);
+    border-radius:11px;padding:5px;min-width:170px;box-shadow:0 8px 28px rgba(0,0,0,.55);display:none}
+  .ctx-item{padding:9px 13px;border-radius:7px;cursor:pointer;font-size:13.5px;font-weight:500;
+    display:flex;align-items:center;gap:8px;color:var(--text)}
+  .ctx-item:hover{background:var(--panel)}
+  .ctx-divider{height:1px;background:var(--line);margin:4px 2px}
+  .ctx-danger{color:#ff6b6b}
+
+  /* link preview card */
+  #linkPreview{margin-top:12px}
+  .prev-card{display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:10px 12px;position:relative;overflow:hidden}
+  .prev-thumb{width:96px;height:60px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:var(--panel2)}
+  .prev-thumb-fb{width:96px;height:60px;border-radius:8px;flex:0 0 auto;background:var(--panel2);display:none;align-items:center;justify-content:center;font-size:26px}
+  .prev-info{flex:1;min-width:0}
+  .prev-title{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:3px}
+  .prev-meta{font-size:12px;color:var(--muted)}
+  .prev-close{position:absolute;top:7px;right:9px;background:none!important;border:none!important;color:var(--faint);font-size:14px;cursor:pointer;min-height:0!important;padding:3px 7px;line-height:1;box-shadow:none!important}
+  .prev-close:hover{color:var(--text)!important;background:none!important}
+  .prev-quality{font-size:11px;color:var(--faint);margin-top:3px}
+  .prev-spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;flex:0 0 auto}
+  .prev-loading-txt{font-size:13px;color:var(--muted)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* favorites section */
+  .fav-section{margin-top:18px}
+  .fav-section label{margin-bottom:7px}
+  .chip .star{font-size:10px;line-height:1;flex:0 0 auto;opacity:.85}
+  .chip.missing{opacity:.42;cursor:default}
+  .chip.missing:hover{border-color:var(--line);background:var(--bg2)}
+  .chip-path{font-size:10.5px;color:var(--faint);font-family:ui-monospace,Menlo,monospace;
+    max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px;display:block}
+
+  .ctx-item.ctx-fav-remove{color:#ff6b6b}
+
+  /* duplicate warning */
+  .dup-box{display:flex;align-items:flex-start;gap:12px;background:#1a1400;border:1.5px solid #f5a623;
+    border-radius:13px;padding:14px 16px;margin-top:14px}
+  .dup-icon{font-size:22px;line-height:1;flex:0 0 auto;margin-top:1px}
+  .dup-body{flex:1;min-width:0}
+  .dup-head{font-size:13px;font-weight:700;color:#f5a623;margin:0 0 4px}
+  .dup-title{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+  .dup-file{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dup-acts{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap}
+  .dup-acts button{min-height:36px;padding:0 16px;font-size:13px}
+
+  /* fingerprint dup warning */
+  #fpDupWarning .dup-box{background:#110a1a;border-color:#9b6bff}
+  #fpDupWarning .dup-head{color:#9b6bff}
+
+  /* ---- Queue tab ---- */
+  textarea{width:100%;padding:13px;font-size:14px;background:var(--bg2);color:var(--text);
+    border:1px solid var(--line);border-radius:11px;outline:none;font-family:ui-monospace,Menlo,monospace;resize:vertical}
+  textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(229,9,20,.16)}
+  textarea::placeholder{color:var(--faint)}
+
+  .queue-controls{display:flex;gap:8px;flex-wrap:wrap}
+  #queueRunBtn{font-size:15px;padding:0 28px;min-height:50px;box-shadow:0 8px 22px rgba(229,9,20,.35)}
+
+  /* Queue rows table */
+  .q-table{width:100%;border-collapse:collapse;margin-top:14px}
+  .q-table th{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;
+    padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
+  .q-row td{padding:8px 8px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+  .q-row:last-child td{border-bottom:0}
+  .q-row:hover td{background:rgba(255,255,255,.02)}
+  .q-status{font-size:14px;width:28px;text-align:center;vertical-align:top}
+  /* Cell wraps a clipped URL/title line plus a freely-wrapping status/error line. */
+  .q-cell{max-width:320px;vertical-align:top}
+  .q-url{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted)}
+  .q-title{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .q-progress{font-size:11px;color:var(--ok);font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* Full, un-clipped error text so nothing gets cut off at the edge of the cell. */
+  .q-err{color:#ff6b6b;font-size:11px;display:block;margin-top:4px;line-height:1.4;
+    white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;max-width:320px;
+    font-family:ui-monospace,Menlo,monospace}
+  .q-note{color:#f5a623;font-size:11px;display:block;margin-top:4px;line-height:1.4;white-space:normal;word-break:break-word;max-width:320px}
+  .q-sel{width:100%;padding:6px 8px;font-size:13px;border-radius:8px;min-height:0}
+  .q-remove{min-height:30px;padding:0 10px;font-size:12px}
+
+  /* status badge dots */
+  .q-fpdup{color:#9b6bff;font-size:11px;display:block;margin-top:4px;line-height:1.4;white-space:normal;word-break:break-word;max-width:320px}
+  .q-st-pending::before{content:"⏳"}
+  .q-st-running::before{content:"⟳";display:inline-block;animation:spin .8s linear infinite}
+  .q-st-done::before{content:"✓";color:var(--ok)}
+  .q-st-error::before{content:"✕";color:#ff6b6b}
+  .q-st-skipped::before{content:"⊘";color:#f5a623}
+  .q-st-flagged::before{content:"⚑";color:#9b6bff}
+
+  /* queue all-to-one row */
+  .q-all-row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  .q-all-row select{width:auto;flex:1;min-width:160px;padding:9px 12px;font-size:14px;min-height:0}
+  .q-all-row button{min-height:38px;padding:0 16px;font-size:13px}
+  .q-all-row label{margin:0;font-size:13px;color:var(--muted);white-space:nowrap;text-transform:none;letter-spacing:0}
+
+  #queueSummary{margin-top:12px;font-size:13px;color:var(--muted)}
+  #queueSummary .ok-c{color:var(--ok)}
+  #queueSummary .err-c{color:#ff6b6b}
+  #queueSummary .skip-c{color:#f5a623}
+
+  /* add area */
+  .q-add-row{display:flex;gap:10px;align-items:flex-start;margin-top:14px}
+  .q-add-row textarea{flex:1}
+  .q-add-row button{min-height:80px;align-self:stretch;flex:0 0 auto;font-size:13px;padding:0 18px}
+
+  /* resume banner */
+  #queueResumeBanner{display:none;background:#1a1100;border:1.5px solid #f5a623;border-radius:12px;
+    padding:12px 16px;margin-bottom:14px;display:none;align-items:center;gap:12px}
+  #queueResumeBanner.show{display:flex}
+  #queueResumeBanner p{margin:0;font-size:13px;color:#f5d020;flex:1}
+  #queueResumeBanner button{min-height:34px;padding:0 14px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="titlebar-drag"></div>
+<div class="wrap">
+
+  <!-- persistent header -->
+  <header class="app">
+    <div class="logo"><span></span></div>
+    <div class="titles"><h1>Selekt DJ Downloader</h1><p data-i18n="tagline">Tracks, sets &amp; videos directo a tus carpetas.</p></div>
+    <div class="spacer"></div>
+    <div class="dest">
+      <span class="lbl" data-i18n="savingIn">Guardando en</span>
+      <span class="path" id="destPath">—</span>
+      <button id="openSettingsBtn" data-i18n="change">Cambiar</button>
+    </div>
+    <button class="langbtn" id="langBtn" title="Switch language / Cambiar idioma">ES / EN</button>
+    <div id="status" role="status"><span class="dot"></span><span id="statusText" data-i18n="starting">Iniciando…</span></div>
+  </header>
+
+  <!-- tabs -->
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true"  data-tab="dl"    data-i18n="tab_dl">Descargar</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="hist"  data-i18n="tab_hist">Historial</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="queue" data-i18n="tab_queue">Cola</button>
+  </div>
+
+  <!-- ===== DOWNLOAD ===== -->
+  <section id="tab-dl">
+    <div class="card">
+      <h2 data-i18n="dl_heading">Descargar</h2>
+      <label for="url" data-i18n="url_label">Pega un enlace (o una lista de reproducción)</label>
+      <div class="url-row">
+        <input id="url" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" />
+        <button id="pasteBtn" class="sec" data-i18n="paste">Pegar</button>
+      </div>
+
+      <!-- link preview -->
+      <div id="linkPreview" style="display:none">
+        <div id="prevLoading" class="prev-card" style="display:none">
+          <div class="prev-spinner"></div>
+          <span class="prev-loading-txt" data-i18n="prev_loading">Buscando info del enlace…</span>
+        </div>
+        <div id="prevData" class="prev-card" style="display:none">
+          <img id="prevThumb" class="prev-thumb" src="" alt=""
+            onerror="this.style.display='none';document.getElementById('prevThumbFb').style.display='flex'" />
+          <div id="prevThumbFb" class="prev-thumb-fb">🎵</div>
+          <div class="prev-info">
+            <div class="prev-title" id="prevTitle"></div>
+            <div class="prev-meta" id="prevMeta"></div>
+            <div class="prev-quality" id="prevQuality" style="display:none"></div>
+          </div>
+          <button class="prev-close" id="prevClose" data-i18n-aria="close" aria-label="Cerrar">✕</button>
+        </div>
+      </div>
+
+      <!-- Feature 3: genre folder suggestion -->
+      <div id="suggestBar" style="display:none;margin-top:10px">
+        <button type="button" id="suggestChip" class="sec" style="width:100%;min-height:48px;font-size:14px;border-radius:11px"></button>
+      </div>
+
+      <div style="margin-top:18px">
+        <div class="folder-head">
+          <label id="destLabel" data-i18n="dest_label">Carpetas · un clic para elegir destino</label>
+          <div class="folder-head-tools">
+            <div class="view-toggle">
+              <button type="button" id="densComfort" class="vt" data-i18n="density_comfortable" data-i18n-title="density_comfortable_t" title="Cómodo">Cómodo</button>
+              <button type="button" id="densCompact" class="vt active" data-i18n="density_compact" data-i18n-title="density_compact_t" title="Compacto">Compacto</button>
+            </div>
+            <div class="view-toggle">
+              <button type="button" id="viewChips" class="vt active" data-i18n-title="view_chips" title="Vista de chips">▦</button>
+              <button type="button" id="viewList" class="vt" data-i18n-title="view_list" title="Vista de lista">☰</button>
+            </div>
+          </div>
+        </div>
+        <div class="dest-filter">
+          <span class="ff-icon">⌕</span>
+          <input id="folderFilter" type="text" autocomplete="off" spellcheck="false"
+            data-i18n-placeholder="filter_ph" placeholder="Filtrar carpetas…" />
+          <button id="folderFilterClear" class="ff-clear" data-i18n-title="filter_clear" title="Limpiar" style="display:none">✕</button>
+        </div>
+        <div class="chips" id="folderChips" role="group" aria-labelledby="destLabel"></div>
+        <div class="folder-actions" id="folderActions"></div>
+        <select id="targetFolder" style="display:none"><option value="">(main folder)</option></select>
+      </div>
+
+      <!-- selects: format / audio quality / loudness target -->
+      <div class="settings-row">
+        <div>
+          <label for="format" data-i18n="format_label">Formato</label>
+          <select id="format">
+            <optgroup label="Audio">
+              <option value="audio:mp3" selected>Audio · MP3</option>
+              <option value="audio:m4a">Audio · M4A</option>
+              <option value="audio:wav">Audio · WAV</option>
+              <option value="audio:flac">Audio · FLAC</option>
+            </optgroup>
+            <optgroup label="Video">
+              <option value="video:original" data-i18n="fmt_orig">Video · Original (rápido)</option>
+              <option value="video:1080">Video · 1080p</option>
+              <option value="video:720">Video · 720p</option>
+              <option value="video:best" data-i18n="fmt_best">Video · Mejor calidad</option>
+            </optgroup>
+          </select>
+        </div>
+        <div id="bitrateWrap">
+          <label for="bitrate" data-i18n="audio_quality_label">Calidad de audio</label>
+          <select id="bitrate">
+            <option value="320" selected data-i18n="bq_320">320 kbps (mejor)</option>
+            <option value="192" data-i18n="bq_192">192 kbps</option>
+            <option value="128" data-i18n="bq_128">128 kbps (liviano)</option>
+          </select>
+        </div>
+        <div id="lufsWrap">
+          <label for="lufsSelect" data-i18n="lufs_label">Target</label>
+          <select id="lufsSelect">
+            <option value="-14" selected data-i18n="lufs_streaming">-14 LUFS (streaming)</option>
+            <option value="-9"  data-i18n="lufs_club">-9 LUFS (club / loud)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- toggles: packed into one wrapping row -->
+      <div class="toggles-row">
+        <div class="tg">
+          <label data-i18n="playlist_label">Lista completa</label>
+          <button type="button" id="playlistToggle" class="toggle" aria-pressed="false"
+            data-i18n-title="playlist_title" title="Activado = descarga toda la lista a la carpeta elegida"><span class="sw"></span><span data-i18n="playlist_btn">Descargar lista</span></button>
+        </div>
+        <div class="tg">
+          <label data-i18n="dup_label">No duplicados</label>
+          <button type="button" id="dupToggle" class="toggle active" aria-pressed="true"
+            data-i18n-title="dup_toggle_title" title="Avisa antes de volver a descargar el mismo archivo"><span class="sw"></span><span data-i18n="dup_btn">Evitar duplicados</span></button>
+        </div>
+        <div class="tg">
+          <label data-i18n="autotag_label">Tag para DJ software</label>
+          <button type="button" id="autoTagToggle" class="toggle active" aria-pressed="true"
+            data-i18n-title="autotag_title" title="Añade título, artista, género al archivo"><span class="sw"></span><span data-i18n="autotag_btn">Auto-tag</span></button>
+        </div>
+        <div class="tg">
+          <label data-i18n="loudnorm_label">Normalizar volumen</label>
+          <button type="button" id="loudnormToggle" class="toggle active" aria-pressed="true"
+            data-i18n-title="loudnorm_title" title="Iguala el volumen con estándar LUFS. Re-encoda el audio."><span class="sw"></span><span data-i18n="loudnorm_btn">Normalizar</span></button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="how">
+      <span class="how-t" data-i18n="how_title">Cómo funciona</span>
+      <span class="step"><span class="n">1</span><span data-i18n="how_1">Copia el enlace del video o audio.</span></span>
+      <span class="step"><span class="n">2</span><span data-i18n="how_2">Pégalo y pulsa Descargar.</span></span>
+    </div>
+    <p class="foot"><b data-i18n="foot_strong">Descarga con responsabilidad</b> <span data-i18n="foot_rest">— solo contenido que poseas o tengas permiso de usar.</span></p>
+
+    <!-- ===== sticky action dock: destination + Download + live progress ===== -->
+    <div class="action-dock" id="actionDock">
+      <div class="dock-inner">
+        <!-- ID-based dup warning (before download) -->
+        <div id="dupWarning" style="display:none">
+          <div class="dup-box">
+            <div class="dup-icon">⚠️</div>
+            <div class="dup-body">
+              <div class="dup-head" data-i18n="dup_already">Ya está en la carpeta</div>
+              <div class="dup-title" id="dupTitle"></div>
+              <div class="dup-file" id="dupFile"></div>
+              <div class="dup-acts">
+                <button id="dupCancel" class="sec" data-i18n="dup_cancel">Cancelar</button>
+                <button id="dupForce" data-i18n="dup_anyway">Descargar igual</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Fingerprint dup warning (after download, async) -->
+        <div id="fpDupWarning" style="display:none">
+          <div class="dup-box">
+            <div class="dup-icon">🎵</div>
+            <div class="dup-body">
+              <div class="dup-head" data-i18n="fp_dup_head">Posible canción duplicada</div>
+              <div class="dup-title" id="fpDupTitle"></div>
+              <div class="dup-file" id="fpDupMatch"></div>
+              <div class="dup-acts">
+                <button id="fpDupDismiss" class="sec" data-i18n="fp_dup_keep">Conservar ambos</button>
+                <button id="fpDupOpen" class="sec" data-i18n="fp_dup_open">Abrir original</button>
+                <button id="fpDupDelete" class="sec" style="color:#ff6b6b;border-color:#ff6b6b" data-i18n="fp_dup_delete">Eliminar nuevo</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- prominent active-download card -->
+        <div id="dlActive" class="dl-active" style="display:none">
+          <div class="dl-active-head">
+            <span class="dl-active-dot"></span>
+            <span class="dl-active-label" data-i18n="downloading_label">Descargando</span>
+            <span class="dl-active-track" id="dlActiveTrack"></span>
+            <span class="dl-active-count" id="dlActiveCount"></span>
+            <button type="button" id="dlStopAllBtn" class="dl-stop dl-stop-all" style="display:none"
+              data-i18n="stop_all" data-i18n-title="stop_all_title">Detener todo</button>
+            <button type="button" id="dlCancelBtn" class="dl-stop"
+              data-i18n="cancel_dl" data-i18n-title="cancel_dl_title">Cancelar</button>
+          </div>
+          <div class="dl-active-title" id="dlActiveTitle"></div>
+          <div class="dl-active-bar" id="dlActiveBar"><i id="dlActiveFill"></i></div>
+          <div class="dl-active-meta">
+            <span id="dlActivePct">0%</span>
+            <span id="dlActiveSpeed"></span>
+            <span id="dlActiveEta"></span>
+            <span id="dlActivePhase"></span>
+          </div>
+        </div>
+        <!-- thin fallback progress bar -->
+        <div id="barWrap">
+          <div id="bar"><i></i></div>
+          <div id="dlInfo">
+            <span id="dlPct"></span>
+            <span id="dlPhase"></span>
+            <span id="dlRight">
+              <span id="dlSpeed"></span>
+              <span id="dlEta"></span>
+            </span>
+          </div>
+        </div>
+        <!-- result / error message -->
+        <div id="msg" role="status" aria-live="polite"></div>
+        <!-- always-visible action row: destination + format + Download -->
+        <div class="dock-action">
+          <div class="dock-summary">
+            <span class="dock-dest"><span class="dock-sw" id="dockSw"></span><span data-i18n="save_hint_pre">Se guardará en</span> <b id="goFolder">carpeta principal</b></span>
+            <span class="dock-chips" id="dockChips"></span>
+          </div>
+          <button id="go" data-i18n="go">Descargar</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== HISTORY ===== -->
+  <section id="tab-hist" style="display:none">
+    <div class="card">
+      <div class="card-head">
+        <h2 data-i18n="hist_heading">Historial de descargas</h2>
+        <button id="clearHist" class="sec" data-i18n="clear_hist">Borrar historial</button>
+      </div>
+      <div id="histMsg" class="field-err" role="alert"></div>
+      <div class="hist" id="histBody"></div>
+    </div>
+  </section>
+
+  <!-- ===== QUEUE ===== -->
+  <section id="tab-queue" style="display:none">
+    <!-- Resume banner (shows on launch if there are pending items) -->
+    <div id="queueResumeBanner">
+      <p data-i18n="queue_resume_msg">Hay elementos pendientes en la cola. ¿Continuar?</p>
+      <button id="queueResumeYes" data-i18n="queue_resume_yes">Reanudar</button>
+      <button id="queueResumeDismiss" class="sec" data-i18n="queue_resume_dismiss">Luego</button>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2 data-i18n="queue_heading">Cola de descargas</h2>
+        <div class="queue-controls">
+          <button id="queueRunBtn" data-i18n="queue_run">▶ Ejecutar cola</button>
+          <button id="queuePauseBtn" class="sec" style="display:none" data-i18n="queue_pause">⏸ Pausar</button>
+          <button id="queueRetryBtn" class="sec" style="display:none" data-i18n="queue_retry_failed">↻ Reintentar fallidos</button>
+          <button id="queueClearBtn" class="sec" data-i18n="queue_clear">Limpiar</button>
+        </div>
+      </div>
+
+      <!-- Paste area -->
+      <label for="queueInput" data-i18n="queue_paste_label">Pega uno o varios enlaces (uno por línea)</label>
+      <div class="q-add-row">
+        <textarea id="queueInput" rows="3" data-i18n-placeholder="queue_input_ph" placeholder="https://…"></textarea>
+        <button id="queueAddBtn" class="sec" data-i18n="queue_add">Añadir a la cola</button>
+      </div>
+
+      <!-- All-to-one folder control -->
+      <div class="q-all-row">
+        <label for="queueAllFolder" data-i18n="queue_all_to">Todos a →</label>
+        <select id="queueAllFolder"></select>
+        <button id="queueApplyAll" class="sec" data-i18n="queue_apply_all">Aplicar a todos</button>
+      </div>
+
+      <!-- Queue table -->
+      <table class="q-table" id="queueTable">
+        <thead>
+          <tr>
+            <th data-i18n="queue_th_status">Estado</th>
+            <th data-i18n="queue_th_url">Enlace / Título</th>
+            <th data-i18n="queue_th_folder">Carpeta</th>
+            <th data-i18n="queue_th_format">Formato</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="queueRows"></tbody>
+      </table>
+
+      <!-- Summary -->
+      <div id="queueSummary"></div>
+    </div>
+  </section>
+
+</div><!-- .wrap -->
+
+<!-- settings modal: main folder + manage folders + watch + fingerprint -->
+<div class="modal-bg" id="settings">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+    <h3 id="settingsTitle" data-i18n="settings_title">Carpeta principal</h3>
+    <p class="sub" data-i18n="settings_sub">Donde se guarda todo. Se configura una sola vez.</p>
+    <div class="pathbox"><code id="mainPath">—</code></div>
+    <div class="btns">
+      <button id="pickMain" data-i18n="pick_main">Elegir carpeta…</button>
+      <button class="sec" id="openMain" data-i18n="open">Abrir</button>
+    </div>
+
+    <!-- Cookies: fix age-restricted / sign-in-required videos -->
+    <div class="sect">
+      <label for="cookiesBrowser" data-i18n="cookies_label">Cookies del navegador · videos con restricción de edad</label>
+      <select id="cookiesBrowser" style="margin-top:8px">
+        <option value="" data-i18n="cookies_none">Ninguno (por defecto)</option>
+        <option value="safari">Safari</option>
+        <option value="chrome">Chrome</option>
+        <option value="brave">Brave</option>
+        <option value="firefox">Firefox</option>
+        <option value="edge">Edge</option>
+        <option value="chromium">Chromium</option>
+        <option value="opera">Opera</option>
+        <option value="vivaldi">Vivaldi</option>
+      </select>
+      <p style="font-size:12px;color:var(--faint);margin:8px 0 0" data-i18n="cookies_help">
+        Elige el navegador donde tienes sesión iniciada en YouTube. En Mac: Safari requiere Acceso total al disco; Chrome puede pedir permiso del Llavero.
+      </p>
+    </div>
+
+    <div class="sect">
+      <label for="folderName" data-i18n="folders_label">Carpetas · una por género, gig o proyecto</label>
+      <div class="row" style="margin-top:0">
+        <div class="grow"><input id="folderName" placeholder="House Sets" aria-describedby="folderNameErr" /></div>
+        <button id="createFolder" data-i18n="create">Crear</button>
+      </div>
+      <div id="folderNameErr" class="field-err" role="alert"></div>
+      <div class="mng-list" id="mngList"></div>
+    </div>
+
+    <!-- Watch-folder section -->
+    <div class="sect">
+      <label data-i18n="watch_sect_label">Watch folder · desde el teléfono</label>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+        <button type="button" id="watchToggle" class="toggle" aria-pressed="false" style="width:auto;flex:0 0 auto">
+          <span class="sw"></span><span data-i18n="watch_btn">Activar</span>
+        </button>
+        <span id="watchStatus" style="font-size:12px;color:var(--faint)"></span>
+      </div>
+      <div id="watchConfig" style="display:none;margin-top:12px">
+        <label data-i18n="watch_inbox_label">Archivo inbox (iCloud / Dropbox)</label>
+        <div class="pathbox">
+          <code id="watchPath">—</code>
+          <button id="pickWatchPath" class="sec" style="min-height:36px;padding:0 12px;font-size:13px" data-i18n="watch_pick">Elegir…</button>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="grow">
+            <label for="watchDestFolder" data-i18n="watch_folder_label">Carpeta destino por defecto</label>
+            <select id="watchDestFolder"></select>
+          </div>
+          <div style="flex:0 0 auto;min-width:180px;align-self:flex-end">
+            <button type="button" id="watchAutorunToggle" class="toggle" aria-pressed="false">
+              <span class="sw"></span><span data-i18n="watch_autorun_btn">Auto-ejecutar</span>
+            </button>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--faint);margin:10px 0 0" data-i18n="watch_help">
+          iOS Shortcut: Share Sheet → "Append to File" → inbox.txt en iCloud
+        </p>
+      </div>
+    </div>
+
+    <!-- Fingerprint dedup section -->
+    <div class="sect">
+      <label data-i18n="fp_sect_label">Detección de canciones duplicadas (audio)</label>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+        <button type="button" id="fpToggle" class="toggle" aria-pressed="false" style="width:auto;flex:0 0 auto">
+          <span class="sw"></span><span data-i18n="fp_btn">Detectar duplicados por audio</span>
+        </button>
+      </div>
+      <div id="fpConfig" style="display:none;margin-top:12px">
+        <div id="fpStatus" style="font-size:12px;color:var(--faint);margin-bottom:10px"></div>
+        <div class="row" style="margin-top:0">
+          <div>
+            <label for="fpThreshold" data-i18n="fp_threshold_label">Sensibilidad</label>
+            <select id="fpThreshold">
+              <option value="0.95" data-i18n="fp_th_strict">Estricta (95%)</option>
+              <option value="0.90" selected data-i18n="fp_th_normal">Normal (90%)</option>
+              <option value="0.80" data-i18n="fp_th_loose">Relajada (80%)</option>
+            </select>
+          </div>
+          <div style="align-self:flex-end">
+            <button id="fpRebuild" class="sec" style="min-height:44px" data-i18n="fp_rebuild">Reconstruir librería</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="close-row"><button id="closeSettingsBtn" data-i18n="done">Listo</button></div>
+  </div>
+</div>
+
+<!-- playlist track picker -->
+<div class="modal-bg" id="plPicker">
+  <div class="modal pl-modal">
+    <h3 data-i18n="pl_pick_title">Seleccionar pistas</h3>
+    <p class="sub" id="plPickSub"></p>
+    <div class="pl-tools">
+      <button class="sec mini" id="plSelectAll" data-i18n="pl_select_all">Todas</button>
+      <button class="sec mini" id="plSelectNone" data-i18n="pl_select_none">Ninguna</button>
+      <span class="pl-count" id="plSelCount"></span>
+    </div>
+    <div class="pl-list" id="plList"></div>
+    <div class="pl-status" id="plStatus" style="display:none"></div>
+    <div class="btns" style="justify-content:flex-end">
+      <button class="sec" id="plCancel" data-i18n="pl_cancel">Cancelar</button>
+      <button id="plDownload">Descargar</button>
+    </div>
+  </div>
+</div>
+
+<!-- folder chip right-click menu -->
+<div id="ctxMenu">
+  <div class="ctx-item" id="ctxOpen"><span>📂</span><span id="ctxOpenLabel">Open folder</span></div>
+  <div class="ctx-divider" id="ctxDivider"></div>
+  <div class="ctx-item" id="ctxRename"><span>✏️</span><span data-i18n="rename">Renombrar</span></div>
+  <div class="ctx-item ctx-danger" id="ctxRemove"><span>✕</span><span data-i18n="remove">Quitar</span></div>
+  <div class="ctx-item ctx-fav-remove ctx-danger" id="ctxFavRemove"><span>✕</span><span data-i18n="fav_remove">Quitar de favoritas</span></div>
+</div>
+
+<script src="destination.js"></script>
+<script src="history-time.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
