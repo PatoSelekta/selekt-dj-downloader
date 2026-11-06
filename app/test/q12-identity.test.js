@@ -8,6 +8,10 @@ const path = require("path");
 const { withHarness } = require("./h3-harness");
 
 const T = { timeout: 20000 };
+function sameReal(a, b) {
+  try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); }
+  catch { return false; }
+}
 
 test("done item with files[] inside main: present; queue.json not rewritten on get", T, async () => {
   await withHarness({}, async (h) => {
@@ -126,18 +130,21 @@ test("locate non-playlist unknown: dialog file inside main becomes present + His
     const [got] = await h.invoke("queue-get");
     assert.equal(got.outputs[0].state, "present");
     const hist = await h.invoke("get-history", { limit: 10 });
-    assert.ok(hist.some((row) => row.file === file));
+    assert.ok(hist.some((row) => sameReal(row.file, file)));
+    assert.ok(sameReal(got.outputs[0].path, file));
   });
 });
 
-test("locate refuses outside roots and unknown playlists; does not copy", T, async () => {
+test("locate outside roots attaches that file; unknown playlists still refused; does not copy", T, async () => {
   await withHarness({}, async (h) => {
     const outsider = h.write("outside/steal.mp3", "x");
     h.write("queue.json", JSON.stringify([{ id: "l2", status: "done", url: "https://example.com/l2" }]));
     h.queueDialog(outsider);
     const r = await h.invoke("queue-locate-file", "l2");
-    assert.equal(r.ok, false);
-    assert.equal((await h.invoke("queue-get"))[0].identityState, "unknown");
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal((await h.invoke("queue-get"))[0].identityState, "present");
+    assert.equal(fs.readFileSync(outsider, "utf8"), "x");
+    assert.deepEqual(await h.invoke("get-favorites"), []);
     h.write("queue.json", JSON.stringify([{
       id: "pl", status: "done", playlist: true, url: "https://example.com/pl",
     }]));

@@ -31,6 +31,8 @@ const YTDLP_PATH = path.join(BIN_DIR, process.platform === "win32" ? "yt-dlp.exe
 
 // Feature 1 — Queue
 const QUEUE_FILE = path.join(DATA_DIR, "queue.json");
+// Exact-file grants from native Locate (realpath only; not a folder grant).
+const LOCATED_FILES = path.join(DATA_DIR, "located_files.json");
 
 // Feature 2 — Watch-folder
 const WATCH_PROCESSED_LOG = path.join(DATA_DIR, "watch_processed.log");
@@ -179,7 +181,9 @@ function resolveOutput(folder) {
 //      delete-file -> the NEW file of a fingerprint-duplicate warning (nothing else);
 //   3. its REAL path (symlinks resolved) is a regular file inside the real path of
 //      the current main folder or of a current favorite folder (descendants allowed;
-//      sibling prefixes such as /a/Music-evil are not inside /a/Music);
+//      sibling prefixes such as /a/Music-evil are not inside /a/Music), OR it is the
+//      exact real file of a persisted Locate grant (located_files.json). A grant is
+//      one file, not its folder. Trash still requires a current root.
 //   4. for trash, the path itself is not a symlink.
 //  The action then uses the resolved real path, not the caller's spelling.
 //  Folders: open-favorite only opens a folder that is a registered favorite
@@ -189,7 +193,8 @@ function resolveOutput(folder) {
 //  data; a swap between the check and the shell call (TOCTOU) is not prevented; the
 //  OS then opens an authorized file with its default handler (no file-type filter).
 //  Files whose folder is no longer the main folder or a favorite are rejected
-//  ("outside"), never redirected; adding that folder as a favorite again restores them.
+//  ("outside") unless that exact file was later granted by Locate; adding that
+//  folder as a favorite again also restores them.
 // ---------------------------------------------------------------------------
 function isInside(root, p, pm = path) {
   const rel = pm.relative(root, p);
@@ -198,6 +203,39 @@ function isInside(root, p, pm = path) {
 function pathKey(p) {
   const r = path.resolve(p);
   return process.platform === "win32" ? r.toLowerCase() : r;
+}
+function allowSetHas(allowedKeys, p) {
+  if (!allowedKeys || typeof p !== "string" || !p) return false;
+  if (allowedKeys.has(pathKey(p))) return true;
+  const real = realOrNull(p);
+  if (real && allowedKeys.has(pathKey(real))) return true;
+  for (const k of allowedKeys) {
+    if (typeof k !== "string" || !k) continue;
+    if (samePath(k, p) || samePath(k, pathKey(p))) return true;
+    if (real && (samePath(k, real) || samePath(pathKey(k), pathKey(real)))) return true;
+    if (sameRealDir(k, p)) return true;
+  }
+  return false;
+}
+function loadLocatedFiles() {
+  try {
+    const v = JSON.parse(fs.readFileSync(LOCATED_FILES, "utf-8"));
+    return Array.isArray(v) ? v.filter((p) => typeof p === "string" && p) : [];
+  } catch { return []; }
+}
+function addLocatedGrant(real) {
+  const list = loadLocatedFiles();
+  if (!list.some((p) => pathKey(p) === pathKey(real) || sameRealDir(p, real))) {
+    list.push(real);
+    writeJsonAtomic(LOCATED_FILES, list);
+  }
+}
+function removeLocatedGrant(real) {
+  const next = loadLocatedFiles().filter((p) => !(pathKey(p) === pathKey(real) || sameRealDir(p, real)));
+  writeJsonAtomic(LOCATED_FILES, next);
+}
+function isLocatedGrant(p) {
+  return loadLocatedFiles().some((g) => pathKey(g) === pathKey(p) || sameRealDir(g, p));
 }
 function validPathArg(p) {
   return typeof p === "string" && p.length > 0 && p.length <= 4096 && !p.includes("\u0000") && path.isAbsolute(p);
@@ -257,7 +295,7 @@ function offeredRevealKeys() {
 // -> { ok:true, real } | { ok:false, code, error }
 function checkManagedFile(p, allowedKeys, { forTrash = false } = {}) {
   if (!validPathArg(p)) return openFail("invalid", "Invalid file path.");
-  if (!allowedKeys.has(pathKey(p))) return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  if (!allowSetHas(allowedKeys, p)) return openFail("not_allowed", "That file is not one this app recorded for this action.");
   const roots = authorizedRoots();
   const real = realOrNull(p);
   if (!real) {
@@ -267,7 +305,8 @@ function checkManagedFile(p, allowedKeys, { forTrash = false } = {}) {
     return inside ? openFail("missing", "File not found.")
                   : openFail("outside", "That file is outside the main folder and your favorite folders.");
   }
-  if (!roots.some(r => r.real && isInside(r.real, real))) {
+  const inRoots = roots.some(r => r.real && isInside(r.real, real));
+  if (!inRoots && (forTrash || !isLocatedGrant(p))) {
     return openFail("outside", "That file is outside the main folder and your favorite folders.");
   }
   let st;
@@ -326,6 +365,46 @@ function readHistory(limit = 50, contains = null) {
       ((r.title || "") + (r.folder || "") + (r.file || "")).toLowerCase().includes(c));
   }
   return rows.slice(-limit).reverse();
+}
+function recordedPathMatches(stored, target) {
+  if (typeof stored !== "string" || !stored || typeof target !== "string" || !target) return false;
+  if (pathKey(stored) === pathKey(target)) return true;
+  const rs = realOrNull(stored), rt = realOrNull(target);
+  if (rs && rt && samePath(rs, rt)) return true;
+  if (rs && pathKey(rs) === pathKey(target)) return true;
+  if (rt && pathKey(stored) === pathKey(rt)) return true;
+  return false;
+}
+function rewriteJsonlAtomic(file, mapRow) {
+  if (!fs.existsSync(file)) return;
+  const rows = fs.readFileSync(file, "utf-8").split("\n").filter(Boolean);
+  const out = rows.map((line) => {
+    try {
+      const row = JSON.parse(line);
+      const next = mapRow(row);
+      return JSON.stringify(next == null ? row : next);
+    } catch { return line; }
+  });
+  const tmp = file + "." + randomUUID() + ".tmp";
+  try {
+    fs.writeFileSync(tmp, out.map((l) => l + "\n").join(""));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
+}
+function rewriteRecordedPaths(oldPaths, real) {
+  const olds = (oldPaths || []).filter((p) => typeof p === "string" && p);
+  const match = (stored) => olds.some((o) => recordedPathMatches(stored, o));
+  rewriteJsonlAtomic(HISTORY_FILE, (row) => {
+    if (!match(row.file)) return row;
+    return { ...row, file: real, folder: path.dirname(real) };
+  });
+  rewriteJsonlAtomic(DL_INDEX_FILE, (row) => {
+    if (!match(row.file)) return row;
+    return { ...row, file: real };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -482,28 +561,45 @@ ipcMain.handle("queue-locate-file", async (_e, itemId) => {
   const r = await dialog.showOpenDialog(mainWindow, { title: "Locate file", properties: ["openFile"] });
   if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
   locatePick = r.filePaths[0];
-  const picked = locatePick;
+  const picked = r.filePaths[0];
+  if (picked !== locatePick) {
+    locatePick = null;
+    return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  }
   locatePick = null;
   if (!validPathArg(picked)) return openFail("invalid", "Invalid file path.");
   const real = realOrNull(picked);
   if (!real) return openFail("missing", "File not found.");
-  const roots = authorizedRoots();
-  if (!roots.some((root) => root.real && isInside(root.real, real))) {
-    return openFail("outside", "That file is outside the main folder and your favorite folders.");
-  }
   let st;
   try { st = fs.statSync(real); } catch (_) { return openFail("missing", "File not found."); }
   if (!st.isFile()) return openFail("not_file", "Not a regular file.");
-  patchQueueItem(item.id, { files: [real], outputDir: path.dirname(real) });
-  if (!historyFileKeys().has(pathKey(real))) {
-    recordHistory({
-      action: item.url ? (String(item.format || "").startsWith("video") ? "video" : "audio") : "located",
-      url: item.url || "",
-      title: path.basename(real),
-      folder: path.dirname(real),
-      file: real,
-      details: actualFormatLabel({ ...item, files: [real] }, real) || "located",
-    });
+  const oldPaths = [
+    ...(Array.isArray(item.files) ? item.files : []),
+    ...collectCandidatePaths(item),
+  ];
+  try {
+    addLocatedGrant(real);
+    try {
+      rewriteRecordedPaths(oldPaths, real);
+      if (!allowSetHas(historyFileKeys(), real)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.appendFileSync(HISTORY_FILE, JSON.stringify({
+          action: item.url ? (String(item.format || "").startsWith("video") ? "video" : "audio") : "located",
+          url: item.url || "",
+          title: path.basename(real),
+          folder: path.dirname(real),
+          file: real,
+          details: actualFormatLabel({ ...item, files: [real] }, real) || "located",
+          time: new Date().toISOString(),
+        }) + "\n");
+      }
+      patchQueueItem(item.id, { files: [real], outputDir: path.dirname(real) });
+    } catch (inner) {
+      try { removeLocatedGrant(real); } catch (_) {}
+      throw inner;
+    }
+  } catch (_) {
+    return openFail("persist_failed", "Could not save the new location. The file was not moved.");
   }
   const next = loadQueue().find((i) => i.id === itemId);
   return { ok: true, ...resolveQueueOutputs(next) };
