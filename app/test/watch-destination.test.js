@@ -181,7 +181,8 @@ test("a saved favorite that was removed afterwards: shown as unavailable (not as
     await runQueueLikeRenderer(h);
     const item = (await queued(h))[0];
     assert.equal(item.status, "error");
-    assert.match(item.error, /favorite/i);
+    assert.match(item.error, /can't use that location/);
+    assert.equal(item.errorCode, "dest_bad");
     assert.deepEqual(h.ytdlpCalls(), [], "nothing was started");
     assert.deepEqual(filesIn(h.music), []);
     assert.deepEqual(filesIn(path.join(h.music, "Techno")), []);

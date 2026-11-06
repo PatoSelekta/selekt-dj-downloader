@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld("api", {
   queueStart: () => ipcRenderer.invoke("queue-start"),
   queuePause: () => ipcRenderer.invoke("queue-pause"),
   queueStopAll: () => ipcRenderer.invoke("queue-stop-all"),
+  queueCancel: () => ipcRenderer.invoke("queue-cancel"),
   queueStatus: () => ipcRenderer.invoke("queue-status"),
   onQueueChanged: (cb) => ipcRenderer.on("queue-changed", () => cb()),
   onQueueRun: (cb) => ipcRenderer.on("queue-run", () => cb()),

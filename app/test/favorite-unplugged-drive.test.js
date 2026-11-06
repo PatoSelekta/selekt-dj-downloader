@@ -32,7 +32,7 @@ test("writable mount parent: a download to a favorite whose drive folder is miss
     const r = await dl(h, { targetPath: fav });
     assert.equal(r.ok, false);
     assert.equal(r.errorCode, "dest_unmounted");
-    assert.match(r.error, /not available/i);
+    assert.match(r.error, /drive|connected|Reconnect/i);
     assert.equal(fs.existsSync(path.join(mountRoot, "USB")), false);
     assert.equal(h.ytdlpCalls().length, 0);
     assert.deepEqual(mainEntries(h), []);
@@ -91,7 +91,7 @@ test("a favorite that was unregistered is still refused (not turned into a mkdir
     h.setConfig({ favorite_folders: [] });
     const r = await dl(h, { targetPath: fav });
     assert.equal(r.ok, false);
-    assert.match(r.error, /not the main folder or one of your favorite folders/);
+    assert.match(r.error, /can't use that location/);
     assert.equal(fs.existsSync(path.join(mountRoot, "USB")), false, "nothing was created for an unregistered path");
   });
 });

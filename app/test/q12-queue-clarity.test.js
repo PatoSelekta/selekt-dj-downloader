@@ -36,8 +36,10 @@ const SRC = [
   cutBlock(RENDERER, "function queueStatusLabel("),
   cutBlock(RENDERER, "function queueFormatSelectHtml("),
   cutBlock(RENDERER, "function canceledNote("),
+  cutBlock(RENDERER, "function locationRefusalText("),
   cutBlock(RENDERER, "function h1Message("),
   cutBlock(RENDERER, "async function handleQueueLocate("),
+  cutBlock(RENDERER, "async function handleQueueShow("),
   cutBlock(RENDERER, "function parseLinks("),
   cutBlock(RENDERER, "function buildQueueItemsFromPaste("),
   cutBlock(RENDERER, "async function applyFolderToPending("),
@@ -167,6 +169,26 @@ test("Locate handler surfaces ok / cancel / error and does not swallow the resul
   assert.match(RENDERER, /r\.canceled/);
   assert.match(RENDERER, /r\.ok/);
   assert.doesNotMatch(RENDERER, /await api\.queueLocateFile\([^)]+\);\s*renderQueue\(\)/);
+});
+
+const LOC_STEM = {
+  en: "This app can't use that location.",
+  es: "Esta app no puede usar esa ubicación.",
+};
+
+test("dest_bad, dest_unmounted, and outside share one location stem in ES and EN, with distinct reasons", () => {
+  for (const lang of ["en", "es"]) {
+    const stem = LOC_STEM[lang];
+    for (const k of ["dest_bad", "dest_unmounted", "h1_outside", "queue_loc_outside"]) {
+      assert.equal(typeof I18N[lang][k], "string", lang + " " + k);
+      assert.ok(I18N[lang][k].startsWith(stem), lang + " " + k + " = " + I18N[lang][k]);
+      assert.ok(I18N[lang][k].length > stem.length, lang + " " + k + " includes a reason");
+    }
+    assert.equal(I18N[lang].h1_outside, I18N[lang].queue_loc_outside, lang + ": Queue outside label matches History/Locate");
+    assert.notEqual(I18N[lang].dest_bad, I18N[lang].dest_unmounted);
+    assert.notEqual(I18N[lang].dest_unmounted, I18N[lang].h1_outside);
+    assert.notEqual(I18N[lang].dest_bad, I18N[lang].h1_outside);
+  }
 });
 
 test("canceled status class is distinct from skipped; HTML defines both", () => {
@@ -341,7 +363,46 @@ test("Locate success, cancel, and error update #queueMsg", T, async () => {
   assert.equal(page.dom.$("queueMsg").textContent, "");
   page.ctx.api.queueLocateFile = async () => ({ ok: false, code: "outside", error: "outside" });
   await page.ctx.handleQueueLocate("u");
-  assert.match(page.dom.$("queueMsg").textContent, /outside|fuera|Could not|No se pudo|not allowed|no está permitida/i);
+  assert.equal(page.dom.$("queueMsg").textContent, I18N.en.h1_outside);
+});
+
+test("Show refusal is not silent and uses the same location language as Locate", T, async () => {
+  const page = await startPage({
+    queue: [item("d", "done", {
+      title: "Fixture Tone 1kHz.mp3",
+      outputs: [{ path: "/tmp/Music/Afro/Fixture Tone 1kHz.mp3", state: "present", actualFormatLabel: "mp3" }],
+      identityState: "present",
+    })],
+  });
+  page.ctx.api.queueRevealOutput = async () => ({ ok: false, code: "outside", error: "x" });
+  const show = page.dom.completed.querySelectorAll(".q-show")[0];
+  assert.ok(show && show.onclick);
+  await show.onclick();
+  assert.equal(page.dom.$("queueMsg").textContent, I18N.en.h1_outside);
+  const es = await startPage({
+    lang: "es",
+    queue: [item("d", "done", {
+      title: "Fixture Tone 1kHz.mp3",
+      outputs: [{ path: "/tmp/Music/Afro/Fixture Tone 1kHz.mp3", state: "present", actualFormatLabel: "mp3" }],
+      identityState: "present",
+    })],
+  });
+  es.ctx.api.queueRevealOutput = async () => ({ ok: false, code: "dest_unmounted", error: "x" });
+  await es.dom.completed.querySelectorAll(".q-show")[0].onclick();
+  assert.equal(es.dom.$("queueMsg").textContent, I18N.es.dest_unmounted);
+});
+
+test("queue error row uses dest_unmounted / dest_bad I18N, not a raw English mix", T, async () => {
+  const page = await startPage({
+    queue: [item("e", "error", { errorCode: "dest_unmounted", error: "raw english from main" })],
+  });
+  assert.match(page.dom.active.rows[0].innerHTML, /This app can't use that location/);
+  assert.doesNotMatch(page.dom.active.rows[0].innerHTML, /raw english from main/);
+  const es = await startPage({
+    lang: "es",
+    queue: [item("e", "error", { errorCode: "dest_bad", error: "Invalid destination for this download. Choose the folder again." })],
+  });
+  assert.match(es.dom.active.rows[0].innerHTML, /Esta app no puede usar esa ubicación/);
 });
 
 test("Show / Locate / Remove from list call the matching APIs; no file delete", T, async () => {

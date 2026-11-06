@@ -121,6 +121,7 @@ function makeHarness({ config = {}, seedBinaries = true, withWindow = false, htt
     },
     queueDialog: (...paths) => state.dialogPaths.push(...paths),
     invoke: (ch, ...a) => handlers.get(ch)({}, ...a),
+    pendingHangs: () => hangers.length,
     releaseHang: (code = 0) => {
       const hng = hangers.shift();
       if (!hng) return false;
@@ -162,7 +163,7 @@ async function withHarness(opts, fn) {
 // queue runner (queue-start) and waits for it to drain.
 const SelektDest = require("../renderer/destination.js");
 const queueItemDest = (item) => SelektDest.queueItemDest(item);
-const INVALID_DEST_TEXT = "Invalid destination for this download. Choose the folder again.";   // = renderer t("dest_bad") (en)
+const INVALID_DEST_TEXT = "This app can't use that location. Choose the folder again.";   // = renderer t("dest_bad") (en)
 const toOpts = (item) => ({
   url: item.url, type: item.playlist ? "playlist" : "video", quality: "best", autoTag: false, _inQueue: true,
   ...(item.playlistItems ? { playlistItems: item.playlistItems } : {}),

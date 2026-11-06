@@ -399,8 +399,8 @@ normalization).*
 - ↻ runs the whole download again, including the files that were already normalized. How yt-dlp treats files that are
   already there on that second run, and what normalizing an already-normalized file does, were **not tested**; if in
   doubt, move the kept files away first.
-- A Cancel pressed after normalization has finished, during the short tagging step, is not acted on: the item completes
-  (and the files really are normalized, so the result and the folder agree).
+- A Cancel pressed during Auto-tag stops that ffmpeg write: the original audio is kept, the `.tag` temp file is
+  removed, the item ends as *Cancelled*, and there is still no History row. Files already normalized stay as they were.
 
 **Limits**
 
@@ -486,9 +486,11 @@ the duplicate check, and audio-fingerprint detection does not run on them.
 *Figure 3. The progress card (simulated, 62 %). (1) current item, (2) progress bar with speed and time left,
 (3) how many items are waiting, (4) **Stop all**, (5) **Cancel**.*
 
-- **Cancel** stops the **current** item and the queue moves on to the next. Leftover partial files (`.part`, `.ytdl`,
-  `.temp`) are cleaned up.
-- **Stop all** cancels the current item and marks everything still waiting as *Cancelled — ↻ to retry*.
+- **Cancel** stops the **current** queue item (including a yt-dlp info probe or Auto-tag ffmpeg still running for
+  that item) and the queue moves on to the next. Leftover partial files (`.part`, `.ytdl`, `.temp`) are cleaned up.
+  Finished audio is kept if Cancel arrives during Normalize or Auto-tag.
+- **Stop all** cancels the current queue item and marks everything still waiting as *Cancelled — ↻ to retry*. It does
+  not cancel a leftover one-off download started outside the queue.
 - These two buttons live on the **Download** tab only. If you are on another tab, switch back to the Download tab.
 - Cancelling while the card says *Normalizing…* ends the item as cancelled but **keeps the finished download(s)**. In a
   list, files that were already normalized stay normalized and the note says how many; see
@@ -569,8 +571,8 @@ History lists the last 50 downloads, newest first, with a format badge, the fold
 
 Play and Show work for files recorded in History that are still inside your main folder or a favourite, **or** for a
 file you later **Located** (that exact file only). A file whose favourite was removed and that was never Located stays
-blocked. Otherwise you see a message such as *That file is outside the main folder and your favorite folders…* or
-*File not found…*.
+blocked. Otherwise you see a message such as *This app can't use that location. It's not in the main folder or your
+favorites…* or *File not found…*. The same location wording is used on Queue Show/Locate and in History.
 
 **What has and has not been checked**
 
@@ -653,15 +655,15 @@ app queues them while it is running.
 - **If the saved destination stops being available** (you removed the favorite, deleted the folder, or the stored value
   is damaged), Settings and the Queue row show **"⚠ Folder unavailable: <name> — choose another"** instead of looking
   like the Main folder. A watched item with a destination that is no longer allowed **fails in the Queue with an error**
-  (*"That destination is not the main folder or one of your favorite folders…"* or *"Invalid destination for this
-  download…"*) and nothing is downloaded: it is **never** sent to the Main folder instead. Choose another folder in
+  (*"This app can't use that location. Choose the folder again."*) and nothing is downloaded: it is **never** sent
+  to the Main folder instead. Choose another folder in
   Settings (for new links) and on the failed row (for that item). Whether ↻ works after re-pointing the row was **not
   tested**.
 - **A damaged value on a Queue row** (a stored destination that is not text, such as `false`, `0`, a number or a
   bracketed object, or text that is not a folder choice) is shown the same way, **"⚠ Folder unavailable: <value> — choose
   another"**. It is not shown as Main and it does not hide or break the row or the rest of the table: the row stays
   visible with its folder list editable, and picking a real folder on it stores that folder. Running it fails with
-  *"Invalid destination for this download…"*; nothing is sent to the download engine and nothing lands in the Main
+  *"This app can't use that location. Choose the folder again."*; nothing is sent to the download engine and nothing lands in the Main
   folder. (An earlier build showed `false` and `0` as Main, and a number or object could stop the Queue from drawing.
   That is fixed. Whether the damaged value can arise in normal use was not established; it was reached only by
   editing stored data in tests.)
@@ -669,7 +671,7 @@ app queues them while it is running.
   deleted is **recreated at the same place** when a watched item runs (this is how the Download tab behaves too). It
   does not go somewhere else.
 - **A favorite on a drive that is not plugged in.** The app now refuses that destination before creating folders:
-  the item fails with *destination unmounted* (`dest_unmounted`) and does **not** mkdir a look-alike path on your
+  the item fails with *This app can't use that location. The drive isn't connected…* (`dest_unmounted`) and does **not** mkdir a look-alike path on your
   disk. **[Unit-tested with mocked paths]**. A real unplugged USB on a Mac was **[Not tested]** in this pass
   (the review Mac was offline). Reconnect the drive or pick another folder.
 - If you only ever saw the destination dropdown fall back to Main in an earlier version: that was the bug (the window
@@ -755,9 +757,9 @@ is trustworthy.
 | *Already in this folder* / *Already in folder (duplicate) — ↻ to download anyway* | Avoid duplicates found the same item. | Use ↻ to download anyway, or turn Avoid duplicates off. |
 | *Invalid folder name. Use a single name, without / or \, and no trailing dot or space.* / *Couldn't create the folder. Check the name and permissions.* | The folder name or permissions are a problem. | Use a plain name; check the main folder is writable. |
 | *Folder unavailable* | A favourite (such as a USB stick) is not connected. | Reconnect it or choose another folder. |
-| *That folder is on a drive that is not available. Reconnect it or choose another.* | The favorite path's parent is missing (drive unplugged). Nothing is created on disk. | Reconnect the drive or pick another folder. |
-| *Invalid destination for this download. Choose the folder again.* | The chosen folder no longer exists or is invalid. | Pick a destination chip again. |
-| *That file is outside the main folder and your favorite folders…* / *File not found…* / *Couldn't open that…* | History cannot open the file. | The file was moved, renamed or deleted, or is outside your folders. |
+| *This app can't use that location. The drive isn't connected. Reconnect it or choose another folder.* | The favorite path's parent is missing (drive unplugged). Nothing is created on disk. | Reconnect the drive or pick another folder. |
+| *This app can't use that location. Choose the folder again.* | The chosen folder is invalid or no longer allowed. | Pick a destination chip again. |
+| *This app can't use that location. It's not in the main folder or your favorites…* / *File not found…* / *Couldn't open that…* | History or Queue Show cannot open the file. | The file was moved, renamed or deleted, or its folder is not in this app's list. Add the folder as a favorite, or Locate the file. |
 | *No tracks found in this playlist.* | The list is empty or unreachable. | Check the link and sign-in needs. |
 | *Download cancelled* / *Cancelled — ↻ to retry* | You cancelled it. | Press ↻ on the row. |
 | An amber *⚠ Downloaded, but NOT normalized: … (reason)* | Normalize was on but could not be completed for that file. The file is saved at its original loudness. | See [If normalization fails](#if-normalization-fails). Download it again, or turn Normalize off for that item. |

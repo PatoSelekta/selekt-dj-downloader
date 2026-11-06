@@ -42,6 +42,9 @@ const SRC = [
   cutBlock(RENDERER, "function queueStatusLabel("),
   cutBlock(RENDERER, "function queueFormatSelectHtml("),
   cutBlock(RENDERER, "function canceledNote("),
+  cutBlock(RENDERER, "function locationRefusalText("),
+  cutBlock(RENDERER, "function h1Message("),
+  cutBlock(RENDERER, "async function handleQueueShow("),
   cutBlock(RENDERER, "async function renderQueue("),
 ].join("\n");
 
@@ -129,7 +132,7 @@ const BAD = [["a malformed string", "garbage"], ["p: with no path", "p:"], ["f: 
 for (const [name, bad] of BAD) {
   for (const status of ["pending", "error", "skipped"]) {
     test(`Queue row with destId = ${name} (${status}): shown as unavailable, never Main; row stays visible and can be re-pointed`, T, async () => {
-      const page = await startPage({ queue: [item("a", ""), item("b", bad, status, status === "error" ? { error: "Invalid destination for this download. Choose the folder again." } : {}), item("c", "f:Techno")] });
+      const page = await startPage({ queue: [item("a", ""), item("b", bad, status, status === "error" ? { error: I18N.en.dest_bad, errorCode: "dest_bad" } : {}), item("c", "f:Techno")] });
       assert.equal(page.dom.rows.length, 3, "all rows rendered: one damaged destination does not break the table");
       assert.match(page.dom.rows[1].innerHTML, /Song b/, "the damaged row is visible with its title");
       const sel = page.dom.select("b");

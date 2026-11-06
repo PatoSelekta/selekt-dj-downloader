@@ -20,6 +20,8 @@
   ctl.settleDelete = (i, result) => ctl.deleteWaiters[i](result === undefined ? { ok: true } : result);
   ctl.finishDownload = (i, result) => {
     const d = ctl.downloads[i];
+    if (d.settled) return;
+    d.settled = true;
     const r = result || { ok: true, count: 1, files: ["/Users/test/Music/dl" + i + ".mp3"], folder: "/Users/test/Music" };
     d.files = r.files || [];
     d.settle(r);
@@ -91,7 +93,7 @@
         emitQC();
         const opts = itemToOpts(item);
         let r;
-        if (opts.destInvalid) r = { ok: false, error: "Invalid destination for this download. Choose the folder again.", errorCode: "dest_bad" };
+        if (opts.destInvalid) r = { ok: false, error: "This app can't use that location. Choose the folder again.", errorCode: "dest_bad" };
         else r = await download(opts);
         if (r && r.ok) {
           item.status = "done";
@@ -181,6 +183,13 @@
       return { ok: true, running: true };
     },
     queuePause: async () => { ctl.qCtl.paused = true; emitQC(); return { paused: true }; },
+    queueCancel: async () => {
+      const d = [...ctl.downloads].reverse().find((x) => x.opts && x.opts._inQueue && !x.settled);
+      if (!d) return { ok: true, killed: false };
+      d.settled = true;
+      d.settle({ ok: false, canceled: true });
+      return { ok: true, killed: true };
+    },
     queueStopAll: async () => { ctl.qCtl.stopAll = true; return { ok: true }; },
     queueStatus: async () => ({ running: ctl.qCtl.running, paused: ctl.qCtl.paused, currentId: (ctl.queue.find(i => i.status === "running") || {}).id || null }),
     download,

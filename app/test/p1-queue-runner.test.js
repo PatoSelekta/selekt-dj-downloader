@@ -198,7 +198,7 @@ test("invalid destId fails the item with dest_bad and never calls yt-dlp", T, as
     const q = await h.invoke("queue-get");
     assert.equal(q[0].status, "error");
     assert.equal(q[0].errorCode, "dest_bad");
-    assert.match(q[0].error, /Invalid destination/);
+    assert.match(q[0].error, /can't use that location/);
     assert.equal(q[1].status, "done");
     assert.equal(h.ytdlpCalls().filter((c) => c.args.includes("-o")).length, 1);
   } finally { h.close(); }

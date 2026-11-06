@@ -51,9 +51,10 @@ const I18N = {
     fav_duplicate: 'La carpeta "{name}" ya está en favoritas.',
     folder_name_bad: "Nombre de carpeta no válido. Usa un solo nombre, sin / ni \\, y sin punto o espacio al final.",
     folder_create_failed: "No se pudo crear la carpeta. Revisa el nombre y los permisos.",
-    dest_bad: "Destino no válido en esta descarga. Elige la carpeta de nuevo.",
+    dest_bad: "Esta app no puede usar esa ubicación. Elige la carpeta de nuevo.",
+    dest_unmounted: "Esta app no puede usar esa ubicación. El disco no está conectado. Reconéctalo o elige otra carpeta.",
     h1_not_allowed: "Esa acción no está permitida para ese archivo o carpeta.",
-    h1_outside: "Ese archivo está fuera de la carpeta principal y de tus carpetas favoritas, así que no se puede abrir desde aquí. Si quitaste su carpeta favorita, vuelve a añadirla.",
+    h1_outside: "Esta app no puede usar esa ubicación. No está en la carpeta principal ni en tus favoritas. Añade la carpeta como favorita, o localiza el archivo.",
     h1_missing: "No se encontró el archivo. Puede que lo hayas movido o borrado.",
     h1_folder_missing: "No se encontró la carpeta. Puede que la hayas movido o borrado.",
     h1_failed: "No se pudo abrir. Inténtalo de nuevo o ábrelo desde el explorador de archivos.",
@@ -110,7 +111,7 @@ const I18N = {
     queue_pl_history: "Estos archivos pueden seguir apareciendo en Historial.",
     queue_loc_unknown: "Ubicación no registrada para este elemento antiguo",
     queue_loc_missing: "El archivo no está en esa carpeta",
-    queue_loc_outside: "La carpeta no está en la lista de esta app — añádela como favorita para usar el archivo",
+    queue_loc_outside: "Esta app no puede usar esa ubicación. No está en la carpeta principal ni en tus favoritas. Añade la carpeta como favorita, o localiza el archivo.",
     queue_requested: "Pedido: {format}",
     queue_located: "Archivo localizado. Mostrar usa esta ubicación.",
     queue_locate_failed: "No se pudo localizar el archivo.",
@@ -246,9 +247,10 @@ const I18N = {
     fav_duplicate: '"{name}" is already in favorites.',
     folder_name_bad: "Invalid folder name. Use a single name, without / or \\, and no trailing dot or space.",
     folder_create_failed: "Couldn't create the folder. Check the name and permissions.",
-    dest_bad: "Invalid destination for this download. Choose the folder again.",
+    dest_bad: "This app can't use that location. Choose the folder again.",
+    dest_unmounted: "This app can't use that location. The drive isn't connected. Reconnect it or choose another folder.",
     h1_not_allowed: "That action isn't allowed for that file or folder.",
-    h1_outside: "That file is outside the main folder and your favorite folders, so it can't be opened from here. If you removed its favorite folder, add it again.",
+    h1_outside: "This app can't use that location. It's not in the main folder or your favorites. Add the folder as a favorite, or Locate the file.",
     h1_missing: "File not found. It may have been moved or deleted.",
     h1_folder_missing: "Folder not found. It may have been moved or deleted.",
     h1_failed: "Couldn't open that. Try again, or open it from your file manager.",
@@ -305,7 +307,7 @@ const I18N = {
     queue_pl_history: "These files may still appear in History.",
     queue_loc_unknown: "Location not recorded for this older item",
     queue_loc_missing: "File not in that folder",
-    queue_loc_outside: "Folder is not in this app's list — add it as a favorite to use this file",
+    queue_loc_outside: "This app can't use that location. It's not in the main folder or your favorites. Add the folder as a favorite, or Locate the file.",
     queue_requested: "Requested: {format}",
     queue_located: "File located. Show uses this location.",
     queue_locate_failed: "Could not locate that file.",
@@ -1201,13 +1203,21 @@ function canceledNote(r) {
   return t("q_canceled_partial").replace("{done}", done).replace("{total}", kept);
 }
 
+function locationRefusalText(code) {
+  if (code === "dest_unmounted") return t("dest_unmounted");
+  if (code === "dest_bad") return t("dest_bad");
+  if (code === "outside") return t("h1_outside");
+  return "";
+}
+
 // ---- open / reveal / trash results (main returns { ok:true } or { ok:false, code }) ----
 function h1Message(r, kind) {
   const code = r && r.code;
   if (kind === "trash") {   // every rejected trash says "not deleted", except a duplicate request for one already running
     return t(code === "missing" ? "h1_missing" : code === "in_progress" ? "h1_trash_busy" : "h1_trash_failed");
   }
-  if (code === "outside") return t("h1_outside");
+  const loc = locationRefusalText(code);
+  if (loc) return loc;
   if (code === "missing") return t(kind === "folder" ? "h1_folder_missing" : "h1_missing");
   if (code === "trash_failed") return t("h1_trash_failed");
   if (code === "not_allowed") return t("h1_not_allowed");
@@ -1238,9 +1248,19 @@ async function handleQueueLocate(id) {
   if (r && r.canceled) return;
   if (el) {
     if (r && r.ok) el.textContent = t("queue_located");
-    else el.textContent = h1Message(r, "file") || t("queue_locate_failed");
+    else el.textContent = locationRefusalText(r && r.code) || h1Message(r, "file") || t("queue_locate_failed");
   }
   await renderQueue();
+}
+
+async function handleQueueShow(id, filePath) {
+  const el = $("queueMsg");
+  if (el) el.textContent = "";
+  if (!api.queueRevealOutput) return;
+  const r = await api.queueRevealOutput(id, filePath);
+  if (el && r && r.ok === false) {
+    el.textContent = locationRefusalText(r.code) || h1Message(r, "file") || t("h1_failed");
+  }
 }
 
 $("url").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("go").click(); } });
@@ -2022,8 +2042,7 @@ async function renderQueue() {
     if (item.status === "running") {
       progressHtml = `<span class="q-progress" id="qprog-${item.id}"></span>`;
     } else if (item.error) {
-      const errText = item.errorCode === "dest_bad" ? t("dest_bad")
-        : (item.needsCookies ? t("cookies_hint") : item.error);
+      const errText = locationRefusalText(item.errorCode) || (item.needsCookies ? t("cookies_hint") : item.error);
       progressHtml = `<div class="q-err" title="${escapeHtml(errText)}">${escapeHtml(errText)}</div>`;
     } else if (item.note || item.status === "canceled") {
       const noteText = item.status === "canceled" ? (canceledNote(item) || item.note || t("q_canceled")) : item.note;
@@ -2139,8 +2158,7 @@ async function renderQueue() {
   });
   qAll(".q-show").forEach((btn) => {
     btn.onclick = async () => {
-      if (!api.queueRevealOutput) return;
-      await api.queueRevealOutput(btn.dataset.id, btn.dataset.path);
+      await handleQueueShow(btn.dataset.id, btn.dataset.path);
     };
   });
   qAll(".q-locate").forEach((btn) => {
@@ -2227,8 +2245,7 @@ function showQueueItemOutcome(item) {
     ? [normWarnText(item.normalize), tagWarnText(item.tagWarning)].filter(Boolean).join(" ")
     : "";
   if (item.status === "error") {
-    const error = item.errorCode === "dest_bad" ? t("dest_bad")
-      : (item.needsCookies ? t("cookies_hint") : (item.error || t("dl_failed")));
+    const error = locationRefusalText(item.errorCode) || (item.needsCookies ? t("cookies_hint") : (item.error || t("dl_failed")));
     msg.className = "err";
     msg.textContent = t("err_pre") + " " + title + " — " + error;
   } else if (item.status === "done" && normWarn) {
@@ -2298,7 +2315,7 @@ function setCancelBusy(busy) {
 if ($("dlCancelBtn")) $("dlCancelBtn").onclick = async () => {
   if (!queueRunning) return;
   setCancelBusy(true);
-  try { await api.cancelDownload(); } catch (_) { setCancelBusy(false); }
+  try { await api.queueCancel(); } catch (_) { setCancelBusy(false); }
 };
 
 if ($("dlStopAllBtn")) $("dlStopAllBtn").onclick = async () => {

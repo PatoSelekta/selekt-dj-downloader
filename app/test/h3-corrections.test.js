@@ -12,7 +12,7 @@ const path = require("path");
 const fs = require("fs");
 const { withHarness, runQueueLikeRenderer, SelektDest, INVALID_DEST_TEXT } = require("./h3-harness");
 
-const NOT_ALLOWED = /not the main folder or one of your favorite folders/;
+const NOT_ALLOWED = /can't use that location/;
 const dl = (h, o) => h.invoke("download", { url: "https://example.com/v", type: "video", quality: "best", autoTag: false, ...o });
 const tmplDir = (call) => path.dirname(call.args[call.args.indexOf("-o") + 1]);
 
@@ -169,11 +169,12 @@ test("source guard: renderer wiring for the corrections", () => {
   const main = fs.readFileSync(path.join(dir, "main.js"), "utf8");
   assert.match(r, /return SelektDest\.queueItemDest\(item\)/);
   assert.match(main, /if \(dest\.destInvalid\)/);
-  assert.match(r, /errorCode === "dest_bad"/);
+  assert.match(r, /locationRefusalText\(/);
+  assert.match(r, /dest_bad/);
   assert.equal((r.match(/await tryCreateFolder\(name\)/g) || []).length, 2, "both creation flows go through tryCreateFolder");
   assert.equal((r.match(/await api\.createFolder\(/g) || []).length, 1, "createFolder is only called inside tryCreateFolder");
   assert.match(r, /api\.pickMainFolder\(\)/);
   assert.match(pre, /pickMainFolder: \(\) => ipcRenderer\.invoke\("pick-main-folder"\)/);
   assert.match(html, /id="folderNameErr"[^>]*role="alert"/);
-  for (const k of ["folder_name_bad", "folder_create_failed", "dest_bad"]) assert.equal((r.match(new RegExp(k + ":", "g")) || []).length, 2, k + " in es and en");
+  for (const k of ["folder_name_bad", "folder_create_failed", "dest_bad", "dest_unmounted"]) assert.equal((r.match(new RegExp(k + ":", "g")) || []).length, 2, k + " in es and en");
 });
