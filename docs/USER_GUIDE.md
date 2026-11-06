@@ -524,7 +524,7 @@ only; it does not change completed files or their locations.
 | **Clear finished from list** | Removes **completed** rows from the list only. Files and History stay. |
 | **Remove errors from list** | Removes error / skipped / canceled / flagged rows. Pending, running and completed stay. Files stay. |
 | **Show in Finder** | Opens the folder of a completed file this app recorded and can still see. |
-| **Locate file** | Native file picker for a missing or unknown **single-file** row. Refused for unknown playlists (use History) and for files outside the main folder and favorites. |
+| **Locate file** | Native file picker for a missing or unknown **single-file** row. Relinks **that exact file**, including one outside the main folder and favorites, without adding the folder or moving the file. Refused for unknown playlists (use History). Cancel is silent; other failures are shown on the Queue tab. |
 | **Add this folder** | Registers the file’s folder as a favorite so the app can use that path again. |
 | Cancel / Stop all | On the Download tab; see [above](#progress-cancel-and-stop-all). |
 
@@ -565,8 +565,9 @@ History lists the last 50 downloads, newest first, with a format badge, the fold
 - **Show** reveals the file in Finder. (The button is labelled **Show**.)
 - **Copy link** copies the original source link to the clipboard.
 
-Play and Show only work for files recorded in History that are still inside your main folder or one of your favourites.
-Otherwise you see a message such as *That file is outside the main folder and your favorite folders…* or
+Play and Show work for files recorded in History that are still inside your main folder or a favourite, **or** for a
+file you later **Located** (that exact file only). A file whose favourite was removed and that was never Located stays
+blocked. Otherwise you see a message such as *That file is outside the main folder and your favorite folders…* or
 *File not found…*.
 
 **What has and has not been checked**

@@ -1,6 +1,6 @@
 # Selekt DJ Downloader — Queue redesign
 
-**Status:** **Q1 + Q2 implemented** on `3654c47`. **Locate-outside-roots follow-up** is investigation-only: `docs/superpowers/specs/2026-11-06-queue-locate-relink-design.md` (not approved to code). **Q3 Move** and **Q4 Convert / Add local files** remain **proposed**. No merge, install, release, or deploy from this document.
+**Status:** **Q1 + Q2 implemented** on `3654c47`. **Locate relink** (exact-file grant outside favorites) is implemented — `docs/superpowers/specs/2026-11-06-queue-locate-relink-design.md`. **Q3 Move** and **Q4 Convert / Add local files** remain **proposed**. No merge, install, release, or deploy from this document.
 
 **Priority:** this redesign is the next product slice. It is **not** generic Phase 2 (presets / filename preview) from the 2026-11-05 staged-upgrade spec. Those later phases stay listed; they are not started.
 
@@ -270,7 +270,7 @@ UI:
 | `outside` | “Folder is not in this app’s list — add it as a favorite to use this file” | **Add this folder** registers `dirname(path)` via the same favorite rules as `add-favorite` (confirm, no second guess). Remove from list |
 | `unknown` | “Location not recorded for this older item” | Locate…, Remove from list |
 
-**Locate…** is a native **file** picker (not `pick-folder`). Single-use grant, same pattern as `pick-main-folder` (1492–1501): the chosen path is accepted only if it is the dialog result **and** `checkManagedFile` would pass after we treat the pick as a history-equivalent grant **or** it sits inside an authorized root. If the user picks a file **outside** current roots: refuse with the existing “add it as a favorite” error; do not silently copy. After a valid Locate, main writes `files` / `outputs` and, if no History row exists, **appends** a History row (`action` stays a download if we know the URL; else `action: "located"`). That restores Show.
+**Locate…** is a native **file** picker (not `pick-folder`). Single-use grant, same pattern as `pick-main-folder`: the chosen path is accepted only if it is the dialog result. The pick authorizes **that exact real file**, including one outside current roots; it does not add a favorite or move bytes. After a valid Locate, main writes `files` / `outputDir`, records a Locate grant, and rewrites matching History / `downloaded_index` rows (or appends History if none). That restores Show/Play. See `docs/superpowers/specs/2026-11-06-queue-locate-relink-design.md`.
 
 Never guess a path from title + destId (playlist templates and `%(title)s` sanitizing make that unsafe).
 

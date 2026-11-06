@@ -1,6 +1,6 @@
 # Queue Locate relink — investigation (3654c47)
 
-**Status:** investigation + recommended correction. **Not approved for coding.** No production implementation, merge, install, release, or deploy from this document.
+**Status:** **Implemented** on this branch (see the PR for the exact commit). §4 is the approved model (`approved`, t80u). No merge, install, release, or deploy from this document. Q3/Q4 stay proposed.
 
 **Trigger:** User reproduced on the real Mac app at `3654c47`. Completed row after a Finder move showed “File not in that folder” + Locate (correct). After native Locate of the same relocated file, Queue still missing/Locate after a tab refresh. History Show said “File not found. It may have been moved or deleted.” Destination may not have been a configured favorite. Locate must not move the file. Optional Add-folder is fine, but Locate should make **that file** locatable without registering its folder.
 
@@ -151,9 +151,9 @@ Harness **A**/**G**: `destId` / `format` unchanged. Dedup `downloaded_index.json
 
 ---
 
-## 4. Recommended correction (minimal, not implemented)
+## 4. Approved correction (implemented)
 
-Reconcile with the user. **Do not code until they approve this model.**
+Native Locate grants that exact realpath, rewrites History + `downloaded_index`, and lets recorded Show/Play resolve the file without adding a favorite. Add-folder stays a separate action. Failures are not swallowed.
 
 ### 4.1 Authorization
 
@@ -225,6 +225,6 @@ Q3 Move, Q4 Convert / Add local files, merge/release/install, touching the isola
 
 ---
 
-## 6. Ask the user
+## 6. Approval
 
-Approve §4 (picker grants the exact file; Add-folder optional and separate; History/index rewrite on relink; no silent Locate errors) before any implementation plan or production edit.
+User approved §4 (`approved`, t80u). Implemented on this branch. Q3/Q4, merge, install, and the user's Mac app remain out of scope.
