@@ -1,6 +1,6 @@
 # Selekt DJ Downloader — staged upgrade design
 
-**Status:** design approved; **Phase 1 implemented** on `cursor/staged-upgrade-design-a99c`. Phases 2–5 not started. Do not merge/release/deploy/install from this pass.
+**Status:** design approved; **Phase 1 implemented** on `cursor/staged-upgrade-design-a99c`. Phases 2–5 not started. A **separate** Queue redesign is proposed (not coded) in `docs/superpowers/specs/2026-11-06-queue-redesign-design.md` and is prioritized over generic Phase 2–5 work. Do not merge/release/deploy/install from this pass.
 
 **Source verified:** git `b4b8283` = `origin/main` at design time. App version `1.1.0`, Electron `^44.10.2` (lockfile 44.10.2). Installed Mac app is **not** on this Linux VM and was **not** re-tested (user Mac offline).
 
@@ -208,6 +208,8 @@ Do **not** wire Delete-new. Keep queue ⚑ flag. Optionally persist `fpDup` as t
 ---
 
 ## 6. Later phases (not this slice)
+
+**Proposed next (separate spec, not approved for coding):** Queue redesign — Active vs Completed, honest location/format, then Move / Convert a copy / local files. See `docs/superpowers/specs/2026-11-06-queue-redesign-design.md`. This is user-driven and **outranks** the generic Phase 2 UX list below.
 
 **Phase 2 — UX:** remembered format (if not already enabled in P1), 2–3 named presets (e.g. DJ-MP3-320-norm, Archive-copy, Club-9), filename + tag preview from probe + dest folder, show `outputDir` on running/done rows, Cancel/Stop on Queue tab (easy once runner is in main).
 
