@@ -158,6 +158,20 @@
       emitQC();
       return { ok: true };
     },
+    queueClearFinished: async () => {
+      ctl.queue = ctl.queue.filter((i) => i.status !== "done");
+      emitQC();
+      return { ok: true, removed: true };
+    },
+    queueRemoveErrors: async () => {
+      const drop = new Set(["error", "skipped", "canceled", "flagged"]);
+      ctl.queue = ctl.queue.filter((i) => !drop.has(i.status));
+      emitQC();
+      return { ok: true, removed: true };
+    },
+    queueRevealOutput: async (id, p) => { ctl.reveals.push([id, p]); return { ok: true }; },
+    queueLocateFile: async () => ({ ok: false, canceled: true }),
+    queueAddOutputFolder: async () => ({ ok: true }),
     queueStart: async () => {
       if (ctl.qCtl.running) { ctl.qCtl.paused = false; emitQC(); return { ok: true, running: true }; }
       ctl.qCtl.running = true;

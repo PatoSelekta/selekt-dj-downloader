@@ -29,20 +29,29 @@ function cutBlock(src, startMarker, open = "{", close = "}") {
 const I18N = vm.runInNewContext("(" + cutBlock(RENDERER, "const I18N = ").replace(/^const I18N = /, "") + ")");
 const SRC = [
   RENDERER.split("\n").find(l => l.startsWith("function escapeHtml(")),
+  RENDERER.split("\n").find(l => l.startsWith("function lastSeg(")),
+  cutBlock(RENDERER, "function pathDir("),
+  cutBlock(RENDERER, "function pathBase("),
   cutBlock(RENDERER, "function buildFolderSelectOptions("),
   cutBlock(RENDERER, "function destOptionsHtml("),
   cutBlock(RENDERER, "function queueItemDest("),
   cutBlock(RENDERER, "function toDownloadOpts("),
+  cutBlock(RENDERER, "function isActiveQueueStatus("),
+  cutBlock(RENDERER, "function queueFormatLabel("),
+  cutBlock(RENDERER, "function destLabelForId("),
+  cutBlock(RENDERER, "function queueStatusLabel("),
+  cutBlock(RENDERER, "function queueFormatSelectHtml("),
+  cutBlock(RENDERER, "function canceledNote("),
   cutBlock(RENDERER, "async function renderQueue("),
 ].join("\n");
 
 // ---- a minimal fake page: just enough for renderQueue and its row handlers ----
 const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 const parseOptions = (html) => { const o = []; html.replace(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g, (_m, v, a, l) => { o.push({ value: unesc(v), label: unesc(l), selected: /\bselected\b/.test(a), disabled: /\bdisabled\b/.test(a) }); return ""; }); return o; };
-function makeDom() {
-  const els = {};
-  const rows = [], cache = new Map();
-  const tbody = {
+function makeBody(cache) {
+  const rows = [];
+  return {
+    rows,
     set innerHTML(v) { rows.length = 0; cache.clear(); this.emptyHtml = v; },
     get innerHTML() { return this.emptyHtml || ""; },
     appendChild(tr) { rows.push(tr); },
@@ -51,14 +60,14 @@ function makeDom() {
       for (const tr of rows) {
         const h = tr.innerHTML;
         if (sel === ".q-retry" || sel === ".q-remove") {
-          const cls = sel.slice(1); const re = new RegExp(`<button class="sec ${cls}" data-id="([^"]*)"`, "g");
+          const cls = sel.slice(1); const re = new RegExp(`<button[^>]*class="[^"]*\\b${cls}\\b[^"]*"[^>]*data-id="([^"]*)"`, "g");
           h.replace(re, (_m, id) => { const k = cls + "|" + id; if (!cache.has(k)) cache.set(k, { dataset: { id }, onclick: null }); out.push(cache.get(k)); return ""; });
         } else if (sel === "select[data-row-id]") {
-          h.replace(/<select class="q-sel" data-row-id="([^"]*)" data-field="(\w+)" ?(disabled)?>([\s\S]*?)<\/select>/g, (_m, id, field, dis, inner) => {
+          h.replace(/<select class="q-sel" data-row-id="([^"]*)" data-field="(\w+)"([^>]*)>([\s\S]*?)<\/select>/g, (_m, id, field, attrs, inner) => {
             const k = "sel|" + id + "|" + field;
             if (!cache.has(k)) {
               let sel_ = parseOptions(inner).findIndex(x => x.selected); if (sel_ < 0) sel_ = 0;
-              const e = { dataset: { rowId: id, field }, disabled: !!dis, options: parseOptions(inner), listeners: {}, addEventListener(t, f) { this.listeners[t] = f; },
+              const e = { dataset: { rowId: id, field }, disabled: /\bdisabled\b/.test(attrs), options: parseOptions(inner), listeners: {}, addEventListener(t, f) { this.listeners[t] = f; },
                 get value() { return sel_ >= 0 ? this.options[sel_].value : ""; },
                 set value(v) { sel_ = this.options.findIndex(x => x.value === v); },
                 get shown() { return sel_ >= 0 ? this.options[sel_] : null; } };
@@ -72,10 +81,28 @@ function makeDom() {
       return out;
     },
   };
+}
+function makeDom() {
+  const els = {};
+  const cache = new Map();
+  const active = makeBody(cache);
+  const completed = makeBody(cache);
   const mk = (id) => ({ id, style: {}, textContent: "", innerHTML: "", disabled: false, classList: { add() {}, remove() {} } });
-  const $ = (id) => id === "queueRows" ? tbody : (els[id] = els[id] || mk(id));
-  const document = { createElement: () => ({ className: "", dataset: {}, innerHTML: "" }) };
-  return { $, document, rows, select: (id, field = "destId") => { tbody.querySelectorAll("select[data-row-id]"); return cache.get(`sel|${id}|${field}`); } };
+  const $ = (id) => {
+    if (id === "queueRows" || id === "queueActiveRows") return active;
+    if (id === "queueCompletedRows") return completed;
+    return (els[id] = els[id] || mk(id));
+  };
+  const document = { createElement: () => ({ className: "", dataset: {}, innerHTML: "", setAttribute() {} }) };
+  return {
+    $, document,
+    get rows() { return [...active.rows, ...completed.rows]; },
+    select: (id, field = "destId") => {
+      active.querySelectorAll("select[data-row-id]");
+      completed.querySelectorAll("select[data-row-id]");
+      return cache.get(`sel|${id}|${field}`);
+    },
+  };
 }
 const clone = (x) => JSON.parse(JSON.stringify(x));
 async function startPage({ queue, folders = ["Techno"], favs = [{ name: "USB", path: "/Volumes/USB/Tracks" }], lang = "en" }) {
@@ -135,10 +162,12 @@ for (const [name, bad] of BAD) {
   }
 }
 
-test("a locked row (done / running) with a damaged destination still renders, as unavailable and disabled", T, async () => {
+test("a running row with a damaged destination is read-only text; a done row has no dest select", T, async () => {
   const page = await startPage({ queue: [item("d", false, "done"), item("r", 0, "running")] });
   assert.equal(page.dom.rows.length, 2);
-  for (const id of ["d", "r"]) { const s = page.dom.select(id); assert.equal(s.disabled, true); assert.match(s.shown.label, /^⚠ Folder unavailable/); }
+  assert.equal(page.dom.select("d"), undefined, "completed rows do not keep a destination select");
+  assert.equal(page.dom.select("r"), undefined, "running rows are read-only instructions, not a disabled select");
+  assert.match(page.dom.rows.map((r) => r.innerHTML).join("\n"), /Folder unavailable|false|0/);
 });
 
 test("the valid destination contracts are unchanged: absent / null / '' = Main, f: and p: shown as chosen, a removed favorite or sub-folder is unavailable", T, async () => {

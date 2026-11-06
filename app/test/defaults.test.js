@@ -214,7 +214,8 @@ function rendererWorld(ui, globals = {}) {
   vm.runInContext([
     m[0],
     "function queueItemDest(item) { return SelektDest.queueItemDest(item); }",
-    cutFunction(RENDERER, "currentDestId"), cutFunction(RENDERER, "toDownloadOpts"), cutFunction(RENDERER, "buildQueueItemFromSelection"),
+    cutFunction(RENDERER, "currentDestId"), cutFunction(RENDERER, "toDownloadOpts"),
+    cutFunction(RENDERER, "buildQueueItemFromSelection"), cutFunction(RENDERER, "buildQueueItemsFromPaste"),
   ].join("\n"), ctx);
   return { ctx, initial, defaultBitrate: m[1] };
 }
@@ -257,15 +258,22 @@ test("Download tab -> queue item (default controls): audio:mp3, 320, auto-tag/no
   assert.deepEqual({ type: o.type, audioFormat: o.audioFormat, bitrate: o.bitrate, autoTag: o.autoTag, loudnorm: o.loudnorm, lufs: o.lufs },
     { type: "audio", audioFormat: "mp3", bitrate: "320", autoTag: true, loudnorm: true, lufs: -14 });
 });
-test("Queue tab 'Add to queue' stores format+bitrate from the controls (mp3/320); the item resolves toggles from the live settings", T, () => {
-  const { ctx } = rendererWorld({ format: "audio:mp3", bitrate: "320" });
-  const stored = { id: "q2", url: "https://example.com/v", destId: "", format: "audio:mp3", bitrate: "320", status: "pending" };   // the shape queueAddBtn builds
-  const o = ctx.toDownloadOpts(stored);
+test("Queue tab 'Add to queue' snapshots format, bitrate, autoTag, loudnorm, lufs; later toggle changes do not rewrite that item", T, () => {
+  const { ctx } = rendererWorld({ format: "audio:mp3", bitrate: "320", queueAllFolder: "f:Techno" });
+  const [stored] = ctx.buildQueueItemsFromPaste(["https://example.com/v"]);
+  assert.deepEqual({
+    destId: stored.destId, format: stored.format, bitrate: stored.bitrate,
+    autoTag: stored.autoTag, loudnorm: stored.loudnorm, lufs: stored.lufs, playlist: stored.playlist,
+  }, {
+    destId: "f:Techno", format: "audio:mp3", bitrate: "320",
+    autoTag: true, loudnorm: true, lufs: -14, playlist: false,
+  });
+  const o = ctx.toDownloadOpts({ ...stored, id: "q2" });
   assert.deepEqual({ audioFormat: o.audioFormat, bitrate: o.bitrate, autoTag: o.autoTag, loudnorm: o.loudnorm, lufs: o.lufs },
     { audioFormat: "mp3", bitrate: "320", autoTag: true, loudnorm: true, lufs: -14 });
-  ctx.loudnormEnabled = false; ctx.lufsValue = -9;                       // user later turns Normalize off / picks -9
-  const o2 = ctx.toDownloadOpts(stored);
-  assert.deepEqual({ loudnorm: o2.loudnorm, lufs: o2.lufs }, { loudnorm: false, lufs: -9 }, "still follows the live controls");
+  ctx.loudnormEnabled = false; ctx.lufsValue = -9;
+  const o2 = ctx.toDownloadOpts({ ...stored, id: "q2" });
+  assert.deepEqual({ loudnorm: o2.loudnorm, lufs: o2.lufs }, { loudnorm: true, lufs: -14 }, "snapshotted item keeps enqueue settings");
 });
 test("existing queue items keep their own stored values (192 kbps, Normalize off) - defaults only fill what is missing", T, () => {
   const { ctx } = rendererWorld({});
@@ -291,7 +299,11 @@ test("a saved queue.json is not modified by starting the app, reading settings o
     h.write("queue.json", JSON.stringify([item], null, 2));
     const before = fs.readFileSync(h.p("queue.json"), "utf8");
     await h.invoke("get-settings");
-    assert.deepEqual(await h.invoke("queue-get"), [item]);
+    const [got] = await h.invoke("queue-get");
+    const { outputs, identityState, ...rest } = got;
+    assert.deepEqual(rest, item);
+    assert.deepEqual(outputs, []);
+    assert.equal(identityState, "unknown");
     assert.equal(fs.readFileSync(h.p("queue.json"), "utf8"), before, "byte-identical");
   });
 });

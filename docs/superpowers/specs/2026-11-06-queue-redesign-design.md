@@ -1,12 +1,12 @@
 # Selekt DJ Downloader — Queue redesign
 
-**Status:** design proposed; **not approved for coding**. No production code, merge, install, release, or deploy from this document.
+**Status:** **Q1 + Q2 implemented** on `cursor/staged-upgrade-design-a99c` (layout + file-location checks). **Q3 Move** and **Q4 Convert / Add local files** remain **proposed** — no production buttons or IPC for those. No merge, install, release, or deploy from this document.
 
 **Priority:** this redesign is the next product slice. It is **not** generic Phase 2 (presets / filename preview) from the 2026-11-05 staged-upgrade spec. Those later phases stay listed; they are not started.
 
 **Branch:** `cursor/staged-upgrade-design-a99c`. App version `1.1.0`. Electron `^44.10.2`.
 
-**Source verified on this VM (2026-11-06):** HEAD `b84089d596f0bb5d8cc285444826e90aa9dd92ea` (`fix: copy matching audio when source bitrate is unknown`). Independent read of `app/main.js`, `app/preload.js`, `app/renderer/renderer.js`, `app/renderer/destination.js`, `app/renderer/index.html`, `app/test/queue-destination-display.test.js`, `app/test/h1-open-actions.test.js`, `app/test-browser/a11y-check.electron.js`, `docs/USER_GUIDE.md`. User screenshot of the current Queue (completed green-check rows with destination/format dropdowns, several “Folder unavailable”) is **current-state evidence only**, not a target layout.
+**Source verified on this VM (2026-11-06, Q1+Q2 implementation):** see the PR for the exact commit. Independent read of `app/main.js` (`resolveQueueOutputs`, sanitized queue writes, reveal/locate/add-folder/clear-finished/remove-errors), `app/preload.js`, `app/renderer/renderer.js` (`renderQueue` Active/Completed), `app/renderer/index.html`, `app/test/q12-identity.test.js`, `app/test/q12-queue-clarity.test.js`. User screenshot of the pre-Q1 Queue remains **current-state evidence of the old UI**, not a target layout. The isolated Mac app on `b84089d` was not touched.
 
 **This-VM / Mac evidence (information, not a full-validation claim):**
 
@@ -173,16 +173,16 @@ Approach A’s split, plus explicit per-file **Move file**, **Convert a copy**, 
 
 ## 4. Recommended incremental scope (after approval only)
 
-Do **not** code until the user approves this spec and the remaining decisions in §12.
+Q1+Q2 were approved and implemented. **Do not implement Q3/Q4** until the user approves those slices. Remaining product decisions in §12 still apply to Q3/Q4.
 
 | Slice | Name | User-visible outcome | File mutation |
 |---|---|---|---|
-| **Q1** | Clarity | Active vs Completed; pending = instructions; completed = reality text; paste confirm line; Apply-to-all copy matches pending-only; snapshot loudnorm/autoTag on Queue-tab add; Clear split (see §8) | None |
-| **Q2** | Identity + Show + Locate + Remove | Every Completed file has a resolved state: `present` / `missing` / `unknown` / `outside`; Show; Locate via native picker; Remove from list | None (Locate only records a path) |
+| **Q1** | Clarity | **Implemented.** Active vs Completed; pending = instructions; completed = reality text; paste confirm line; Apply-to-pending copy matches pending-only; snapshot loudnorm/autoTag on Queue-tab add; Clear finished / Remove errors | None |
+| **Q2** | Identity + Show + Locate + Remove | **Implemented.** Every Completed file has a resolved state: `present` / `missing` / `unknown` / `outside`; Show; Locate via native picker; Remove from list | None (Locate only records a path) |
 | **Q3** | Move file | Explicit Move; native dest from authorized roots; same-volume rename; cross-volume copy+verify+delete source; no overwrite; update queue + History + index | Yes, move only |
 | **Q4** | Convert a copy + local files | Convert job on sequential runner; new file; original untouched; local files via native picker | Yes, new file only |
 
-**Recommended first coding approval:** **Q1 + Q2** together (the screenshot is fixed and actions that need a path are honest). **Q3** next (destination correction). **Q4** after Q3 (convert and local files share the same job + naming + collision rules).
+**Q1 + Q2 are implemented.** **Q3** (destination correction / Move) and **Q4** (Convert a copy + local files) stay proposed. Do not add live-looking buttons for unimplemented Q3/Q4 actions.
 
 Out of **this** redesign (stay on the old later-phase list unless the user pulls them in): presets, filename/tag preview on the Download tab, fingerprint review sheet, packaging/Intel, signing, splitting `main.js` into modules, wrapping `queue.json` in a schema object, True Peak limiter, deleting downloaded music.
 

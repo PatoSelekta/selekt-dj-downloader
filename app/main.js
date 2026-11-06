@@ -339,15 +339,106 @@ function loadQueue() {
 }
 function saveQueue(q) { writeJsonAtomic(QUEUE_FILE, Array.isArray(q) ? q : []); }
 
-ipcMain.handle("queue-get", () => loadQueue());
+const MAIN_OWNED_FIELDS = ["files", "outputs", "outputDir", "encodePlan", "sourcePath"];
+function stripMainOwned(item, previous) {
+  const copy = { ...(item || {}) };
+  for (const k of MAIN_OWNED_FIELDS) {
+    if (previous && Object.prototype.hasOwnProperty.call(previous, k)) copy[k] = previous[k];
+    else delete copy[k];
+  }
+  return copy;
+}
+function actualFormatLabel(item, filePath) {
+  const ext = path.extname(filePath || "").replace(".", "").toLowerCase();
+  const plan = item && item.encodePlan;
+  if (plan && plan.mode === "copy") {
+    const fmt = plan.targetFormat || ext || "audio";
+    if (plan.sourceAbr != null) return `${fmt} source ~${Math.round(Number(plan.sourceAbr))} kbps preserved`;
+    return `${fmt} source preserved`;
+  }
+  if (plan && plan.targetFormat) {
+    return plan.targetBitrate ? `${plan.targetFormat} ${plan.targetBitrate}kbps` : String(plan.targetFormat);
+  }
+  if (item && item.format === "video:original") return "original";
+  return ext || "";
+}
+function queueOutputAllowKeys(item) {
+  const keys = new Set();
+  if (item && Array.isArray(item.files)) {
+    for (const f of item.files) {
+      if (typeof f === "string" && f) keys.add(pathKey(f));
+    }
+  }
+  return keys;
+}
+function classifyOutputPath(p, item) {
+  const ext = (typeof p === "string" && p) ? path.extname(p) : "";
+  const label = actualFormatLabel(item, p);
+  let bytes = null;
+  try {
+    if (typeof p === "string" && fs.existsSync(p) && fs.statSync(p).isFile()) bytes = fs.statSync(p).size;
+  } catch (_) {}
+  if (!validPathArg(p)) {
+    return { path: p, actualExt: ext, actualFormatLabel: label, bytes: null, state: "unknown" };
+  }
+  const allow = new Set([...historyFileKeys(), ...queueOutputAllowKeys(item)]);
+  const chk = checkManagedFile(p, allow);
+  if (chk.ok) return { path: p, actualExt: ext, actualFormatLabel: label, bytes, state: "present" };
+  if (chk.code === "outside") return { path: p, actualExt: ext, actualFormatLabel: label, bytes, state: "outside" };
+  if (chk.code === "missing") return { path: p, actualExt: ext, actualFormatLabel: label, bytes: null, state: "missing" };
+  if (!fs.existsSync(p)) return { path: p, actualExt: ext, actualFormatLabel: label, bytes: null, state: "missing" };
+  return { path: p, actualExt: ext, actualFormatLabel: label, bytes, state: "outside" };
+}
+function collectCandidatePaths(item) {
+  const out = [];
+  const seen = new Set();
+  const add = (p) => {
+    if (typeof p !== "string" || !p || !path.isAbsolute(p)) return;
+    const k = pathKey(p);
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(p);
+  };
+  if (Array.isArray(item.files)) item.files.forEach(add);
+  if (!out.length && item.url) {
+    const rows = readHistory(Number.MAX_SAFE_INTEGER).filter((r) => r && r.url === item.url && r.file);
+    const prefer = item.outputDir;
+    const ranked = prefer
+      ? [...rows.filter((r) => r.folder === prefer || (typeof r.folder === "string" && r.folder.startsWith(prefer + path.sep))), ...rows]
+      : rows;
+    ranked.forEach((r) => add(r.file));
+  }
+  return out;
+}
+function resolveQueueOutputs(item) {
+  if (!item || item.status !== "done") return { outputs: [], identityState: null };
+  const outputs = collectCandidatePaths(item).map((p) => classifyOutputPath(p, item));
+  let identityState = "unknown";
+  if (!outputs.length) identityState = "unknown";
+  else if (outputs.some((o) => o.state === "present")) identityState = "present";
+  else if (outputs.every((o) => o.state === "outside")) identityState = "outside";
+  else identityState = "missing";
+  return { outputs, identityState };
+}
+function viewQueue() {
+  return loadQueue().map((it) => (it.status === "done" ? { ...it, ...resolveQueueOutputs(it) } : it));
+}
 
-ipcMain.handle("queue-set", (_e, q) => { saveQueue(q); return { ok: true }; });
+ipcMain.handle("queue-get", () => viewQueue());
+
+ipcMain.handle("queue-set", (_e, q) => {
+  const prevById = new Map(loadQueue().map((i) => [i.id, i]));
+  const incoming = Array.isArray(q) ? q : [];
+  saveQueue(incoming.map((item) => stripMainOwned(item, prevById.get(item && item.id))));
+  return { ok: true };
+});
 
 ipcMain.handle("queue-add", (_e, items) => {
   const q = loadQueue();
-  const newItems = (items || []).map(item => ({
-    id: randomUUID(), status: "pending", title: null, error: null, ...item,
-  }));
+  const newItems = (items || []).map((item) => {
+    const stripped = stripMainOwned(item, null);
+    return { id: randomUUID(), status: "pending", title: null, error: null, ...stripped };
+  });
   q.push(...newItems);
   saveQueue(q);
   return { ok: true, items: newItems };
@@ -355,9 +446,96 @@ ipcMain.handle("queue-add", (_e, items) => {
 
 ipcMain.handle("queue-update-item", (_e, patch) => {
   const q = loadQueue();
-  const i = q.findIndex(x => x.id === patch.id);
-  if (i >= 0) { Object.assign(q[i], patch); saveQueue(q); }
+  const i = q.findIndex((x) => x.id === patch.id);
+  if (i >= 0) {
+    const safe = { ...patch };
+    for (const k of MAIN_OWNED_FIELDS) delete safe[k];
+    Object.assign(q[i], safe);
+    saveQueue(q);
+  }
   return { ok: true };
+});
+
+let locatePick = null;
+ipcMain.handle("queue-reveal-output", async (_e, itemId, filePath) => {
+  const item = loadQueue().find((i) => i.id === itemId);
+  if (!item || item.status !== "done") return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  const { outputs } = resolveQueueOutputs(item);
+  if (!outputs.some((o) => o.state === "present" && pathKey(o.path) === pathKey(filePath))) {
+    return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  }
+  const allow = new Set([...historyFileKeys(), ...queueOutputAllowKeys(item)]);
+  const chk = checkManagedFile(filePath, allow);
+  if (!chk.ok) return chk;
+  try { shell.showItemInFolder(chk.real); } catch (_) { return openFail("open_failed", "The system could not show it."); }
+  return { ok: true };
+});
+
+ipcMain.handle("queue-locate-file", async (_e, itemId) => {
+  const item = loadQueue().find((i) => i.id === itemId);
+  if (!item || item.status !== "done") return openFail("not_allowed", "That item cannot be located.");
+  const resolved = resolveQueueOutputs(item);
+  if (item.playlist && resolved.identityState === "unknown") {
+    return openFail("not_allowed", "Locate one file at a time is not available for this playlist. Use History.");
+  }
+  locatePick = null;
+  const r = await dialog.showOpenDialog(mainWindow, { title: "Locate file", properties: ["openFile"] });
+  if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  locatePick = r.filePaths[0];
+  const picked = locatePick;
+  locatePick = null;
+  if (!validPathArg(picked)) return openFail("invalid", "Invalid file path.");
+  const real = realOrNull(picked);
+  if (!real) return openFail("missing", "File not found.");
+  const roots = authorizedRoots();
+  if (!roots.some((root) => root.real && isInside(root.real, real))) {
+    return openFail("outside", "That file is outside the main folder and your favorite folders.");
+  }
+  let st;
+  try { st = fs.statSync(real); } catch (_) { return openFail("missing", "File not found."); }
+  if (!st.isFile()) return openFail("not_file", "Not a regular file.");
+  patchQueueItem(item.id, { files: [real], outputDir: path.dirname(real) });
+  if (!historyFileKeys().has(pathKey(real))) {
+    recordHistory({
+      action: item.url ? (String(item.format || "").startsWith("video") ? "video" : "audio") : "located",
+      url: item.url || "",
+      title: path.basename(real),
+      folder: path.dirname(real),
+      file: real,
+      details: actualFormatLabel({ ...item, files: [real] }, real) || "located",
+    });
+  }
+  const next = loadQueue().find((i) => i.id === itemId);
+  return { ok: true, ...resolveQueueOutputs(next) };
+});
+
+ipcMain.handle("queue-add-output-folder", (_e, itemId, filePath) => {
+  const item = loadQueue().find((i) => i.id === itemId);
+  if (!item || item.status !== "done") return openFail("not_allowed", "That folder cannot be added.");
+  const { outputs } = resolveQueueOutputs(item);
+  const hit = outputs.find((o) => pathKey(o.path) === pathKey(filePath));
+  if (!hit) return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  if (!validPathArg(filePath)) return openFail("invalid", "Invalid file path.");
+  const dir = path.dirname(filePath);
+  const cfg = loadConfig();
+  cfg.favorite_folders = Array.isArray(cfg.favorite_folders) ? cfg.favorite_folders : [];
+  if (!cfg.favorite_folders.some((f) => samePath(f.path, dir))) {
+    cfg.favorite_folders.push({ path: dir, name: path.basename(dir), added: new Date().toISOString() });
+    saveConfig(cfg);
+  }
+  return { ok: true, path: dir, name: path.basename(dir) };
+});
+
+ipcMain.handle("queue-clear-finished", () => {
+  saveQueue(loadQueue().filter((i) => i.status !== "done"));
+  emitQueueChanged();
+  return { ok: true, removed: true };
+});
+ipcMain.handle("queue-remove-errors", () => {
+  const drop = new Set(["error", "skipped", "canceled", "flagged"]);
+  saveQueue(loadQueue().filter((i) => !drop.has(i.status)));
+  emitQueueChanged();
+  return { ok: true, removed: true };
 });
 
 const SelektDest = require("./renderer/destination.js");

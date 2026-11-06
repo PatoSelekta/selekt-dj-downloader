@@ -238,7 +238,8 @@ test("a registered favorite whose folder is missing is recreated at the same pat
 test("contract: the renderer uses `destid` for the watch destination (the old `folder` field is gone) and main.js reads watch_destid", T, () => {
   assert.doesNotMatch(WATCH_SRC, /watchSet\(\{\s*folder:/);
   assert.doesNotMatch(WATCH_SRC, /watchSettings\.folder/);
-  assert.match(RENDERER, /data-field="destId" \$\{locked \? "disabled" : ""\}>\$\{destOptionsHtml\(item\.destId\)\}<\/select>/, "Queue rows show a stale destination as unavailable too");
+  assert.match(RENDERER, /data-field="destId">\$\{destOptionsHtml\(item\.destId\)\}<\/select>/, "pending Queue rows still show a stale destination as unavailable");
+  assert.doesNotMatch(RENDERER, /data-field="destId" \$\{locked \? "disabled"/, "completed/running rows are not disabled dest selects");
   assert.doesNotMatch(RENDERER, /destOptionsHtml\(item\.destId \|\|/, "a falsy stored value must not be turned into the main folder before display");
   assert.match(WATCH_SRC, /api\.watchSet\(\{ destid: value \}\)/);
   assert.match(WATCH_SRC, /watchSettings\.destid/);

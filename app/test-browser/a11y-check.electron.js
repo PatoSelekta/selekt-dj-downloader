@@ -42,7 +42,10 @@ const over = {
 };
 window.api = new Proxy({}, { get: (t, k) => (k in over ? over[k] : base[k]) });
 ctl.queue = [{ id: "q-1", status: "pending", url: "https://example.com/a", title: "Test tone 1 kHz" },
-             { id: "q-2", status: "pending", url: "https://example.com/b", title: null }];
+             { id: "q-2", status: "pending", url: "https://example.com/b", title: null },
+             { id: "q-3", status: "done", url: "https://example.com/c", title: "Fixture Tone 1kHz.mp3",
+               identityState: "present",
+               outputs: [{ path: "/Users/test/Music/Afro/Fixture Tone 1kHz.mp3", state: "present", actualFormatLabel: "mp3 source preserved" }] }];
 `);
 
 async function openWin(rendererDir, width, lang) {
@@ -217,8 +220,13 @@ const ACTIVE = `(() => { const a = document.activeElement; if (!a || a === docum
   await A.ev(`document.querySelector('[data-tab="queue"]').click()`); await sleep(250);
   { const r = await lbl("#queueInput", 'label[for="queueInput"]');
     check(`#queueInput: accessible name = visible label ("${r.t}")`, r.t && r.n && r.n.name && r.n.name.toLowerCase().includes(r.t.toLowerCase()), JSON.stringify(r.n && r.n.name)); }
+  const qh = await A.ev(`({ a: (document.getElementById("queue-active-h") || {}).textContent, c: (document.getElementById("queue-completed-h") || {}).textContent, sels: document.querySelectorAll("#queueCompletedRows select").length })`);
+  check("Queue has Active and Completed headings (ES)", /espera|error/i.test(qh.a || "") && /complet/i.test(qh.c || ""), JSON.stringify(qh));
+  check("Completed section has no dest/format selects", qh.sels === 0, JSON.stringify(qh));
   const qrem = await A.axAll(".q-remove");
-  check("queue remove buttons have meaningful names (ES)", qrem.length === 2 && qrem.every(q => /^Quitar: /.test(q.name || "")) && qrem[0].name.includes("Test tone"), JSON.stringify(qrem.map(q => q.name)));
+  check("queue remove buttons have meaningful names (ES)", qrem.length >= 2 && qrem.every(q => /Quitar de la lista/.test(q.name || "")) && qrem.some(q => /Test tone/.test(q.name || "")), JSON.stringify(qrem.map(q => q.name)));
+  const qshow = await A.axAll(".q-show");
+  check("completed Show button is named (ES)", qshow.length >= 1 && qshow.every(q => /Mostrar/.test(q.name || "")), JSON.stringify(qshow.map(q => q.name)));
   check("preview close (icon-only) button carries a localized aria-label", await A.ev(`document.getElementById("prevClose").getAttribute("aria-label")`) === "Cerrar");
   await A.ev(`document.querySelector('[data-tab="dl"]').click()`);
 
@@ -251,7 +259,9 @@ const ACTIVE = `(() => { const a = document.activeElement; if (!a || a === docum
   check("add buttons named in English", eadd.length === 2 && eadd.every(a => a.role === "button" && /folder/i.test(a.name || "")), JSON.stringify(eadd.map(a => a.name)));
   await E.ev(`document.querySelector('[data-tab="queue"]').click()`); await sleep(250);
   const eq = await E.axAll(".q-remove");
-  check("queue remove buttons named in English", eq.length === 2 && eq.every(q => /^Remove: /.test(q.name || "")), JSON.stringify(eq.map(q => q.name)));
+  check("queue remove buttons named in English", eq.length >= 2 && eq.every(q => /Remove from list/.test(q.name || "")), JSON.stringify(eq.map(q => q.name)));
+  const eh = await E.ev(`({ a: (document.getElementById("queue-active-h") || {}).textContent, c: (document.getElementById("queue-completed-h") || {}).textContent })`);
+  check("Queue headings in English", /Waiting|failed/i.test(eh.a || "") && /Completed/i.test(eh.c || ""), JSON.stringify(eh));
   await E.ev(`document.querySelector('[data-tab="dl"]').click()`);
   await E.ev(`document.getElementById("openSettingsBtn").focus()`); await E.key("Enter");
   const edlg = await E.ax("#settings .modal");

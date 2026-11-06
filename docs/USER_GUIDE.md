@@ -501,39 +501,52 @@ also **[Measured]** with real ffmpeg (see the section above).
 
 ## The Queue
 
-![The Queue tab: 1 paste box, 2 Folder selector, 3 Pause, 4 Retry failed, 5 Clear, 6 status column with done, skipped, error, running and pending rows, 7 the per-row retry button.](images/04-queue-tab.png)
+The Queue tab is split into **Waiting and failed** (Active) and **Completed files**. Pending folder and format
+are **download instructions**. Completed rows show the **actual** folder and format for each file — not a disabled
+dropdown that looks editable. **Move file**, **Convert a copy**, and **Add local files** are not in this build.
 
-*Figure 4. The Queue tab with synthetic items in each state. (1) paste one or more links, one per line, (2) folder for
-new items, (3) Pause, (4) Retry failed, (5) Clear, (6) status icon, (7) retry for one row.*
+![Labeled fixture Queue: Active waiting/failed rows with Save to / Download as selects; Completed rows with real folder, source-preserved format, Show / Locate / Add this folder / Remove from list. Banner says FIXTURE DATA.](images/10-queue-q12-fixture.png)
 
-**Add:** paste one or more links (one per line), choose a folder, click **Add to queue**. **Apply to all** sets the
-chosen folder on every item. Each row has its own folder and format list (the row format list does not include
-*Best quality* video).
+*Figure 10. Q1+Q2 Queue layout using labeled **fixture** titles only (`Fixture Tone 1kHz.mp3`, `Fixture Playlist A`, …). Not a user library.*
+
+**Add:** paste one or more links (one per line). A confirm line says how many links will go to which folder as which
+format. **Add to queue** snapshots the current folder, format, bitrate, Auto-tag, Normalize and LUFS on those rows
+(`playlist` is always off here — one URL per row). **Apply to pending** sets the chosen folder on **pending** rows
+only; it does not change completed files or their locations.
 
 | Action | What it does |
 |---|---|
 | **▶ Run queue** | Starts the queue when it is idle. While the queue runs, this button is replaced by **Pause**. |
 | **⏸ Pause** | Stops the queue from starting the **next** item. The one already downloading keeps going. The button then reads **▶ Resume**. |
-| **Row ↻ (retry)** | Re-queues that row. For a skipped duplicate it forces the download. |
-| **Retry failed** | Re-queues every row that errored, was skipped, or was flagged. **Cancelled rows are not included**; use their own ↻. |
-| **Row ✕** | Removes that row. Disabled while the queue is running. |
-| **Clear** | Empties the **list** (see below). |
+| **Row Reintentar / Retry** | Re-queues that failed row. For a skipped duplicate it forces the download. |
+| **Retry failed** | Re-queues every row that errored, was skipped, or was flagged. **Cancelled rows are not included**; use their own Retry. |
+| **Remove from list** | Removes that row from the list. Disabled only on the row that is currently running. **Does not delete files.** |
+| **Clear finished from list** | Removes **completed** rows from the list only. Files and History stay. |
+| **Remove errors from list** | Removes error / skipped / canceled / flagged rows. Pending, running and completed stay. Files stay. |
+| **Show in Finder** | Opens the folder of a completed file this app recorded and can still see. |
+| **Locate file** | Native file picker for a missing or unknown **single-file** row. Refused for unknown playlists (use History) and for files outside the main folder and favorites. |
+| **Add this folder** | Registers the file’s folder as a favorite so the app can use that path again. |
 | Cancel / Stop all | On the Download tab; see [above](#progress-cancel-and-stop-all). |
 
-Status icons: ✓ done, a circle-slash for skipped (duplicate), ✕ for error (the message is shown under the link),
-a spinner with a percentage for running, an hourglass for pending. An amber note under a ✓ row is a warning, for
-example that normalization could not be completed ([details](#if-normalization-fails)).
+Completed location states: **present** (folder name + Show), **missing** (Locate), **outside** (Add this folder),
+**unknown** (Locate on a single file; playlists point at History). Old rows without `files[]` are recovered from
+History by URL when possible; the app does **not** guess a path from the title.
+
+Status icons: ✓ completed, a circle-slash for skipped (duplicate), ✕ for error (the message is shown under the link),
+a spinner with a percentage for running, an hourglass for pending. An amber note under a completed row is a warning,
+for example that normalization could not be completed ([details](#if-normalization-fails)).
 
 The queue runs in the main process, one item at a time. Reloading the window does **not** restart or duplicate the
 item that is already downloading. If the **app** was killed mid-item, that row is reset to pending on the next launch
-and the Resume banner can continue the rest. **[Unit-tested]** (stubs). This was **not** exercised on a Mac in this pass.
+and the Resume banner can continue the rest. **[Unit-tested]** (stubs). Packaged Mac GUI for this Queue layout is
+**not** claimed from the Linux VM.
 
 ### Clearing a queue is not deleting files
 
-**Clear only empties the queue list.** It does **not** delete any downloaded file, and it does **not** erase
-History or the duplicate record. Likewise **Clear history** only removes History rows; the files stay in your folders.
-The app has no button that deletes your downloaded music. If a download is already in progress, **Clear also cancels
-that child process** and then empties the list. Files already finished stay on disk.
+**Clear finished from list** and **Remove errors from list** only change the queue list. They do **not** delete any
+downloaded file, and they do **not** erase History or the duplicate record. Likewise **Clear history** only removes
+History rows; the files stay in your folders. The app has no Queue button that deletes your downloaded music.
+(The older nuclear **Clear** that emptied the whole list and cancelled the running child is no longer on this tab.)
 
 ---
 
@@ -830,6 +843,7 @@ engine (download and version check); yt-dlp itself contacts the sites you ask fo
 - The progress card, the queue states, the History rows and the "fpcalc not found" line are staged states, not
   results of real downloads. Figures 8 and 9 were made the same way, after the Normalize warning was added: the
   simulated backend returns a "normalization failed" result and the real window code shows the warning.
+  Figure 10 is a labeled **fixture** of the Q1+Q2 Queue (Active vs Completed). Titles are `Fixture*` only.
 - Retaking them from a live Electron run is possible and would show the macOS window frame.
 
 [← Back to the README](../README.md)

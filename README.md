@@ -23,8 +23,9 @@ audio or video into folders you organise yourself (one per genre, gig or project
 - **Download audio or video** from a pasted link: MP3 or M4A (128, 192 or 320 kbps), WAV or FLAC for audio; Original, 1080p, 720p or Best for video.
 - **Folders for your library.** Pick one main folder (it defaults to `~/Downloads` until you choose), create sub-folders, add favourite folders from anywhere (a USB stick, say), and choose the destination with one click.
 - **Safer defaults for DJ use:** MP3, 320 kbps, loudness normalisation on at −14 LUFS, Avoid duplicates on, Auto-tag on, playlist download off.
-- **Queue** for many links at once, with pause, cancel, retry and clear. The sequential runner lives in the
-  main process (window reload does not duplicate the active item).
+- **Queue** for many links at once: Active (waiting / running / failed) vs Completed files, with pause, cancel,
+  retry, Show, Locate, and list-only clear. The sequential runner lives in the main process (window reload does
+  not duplicate the active item). Move / Convert / Add local files are not in this build.
 - **Honest warnings:** if loudness normalization is on but cannot be completed, the file is kept at its original loudness and the app says so. Cancelling part-way through a list keeps the finished files and says how many were normalized.
 - **History** of recent downloads with Play, Show in folder and Copy link.
 - **Playlists** with a track picker.

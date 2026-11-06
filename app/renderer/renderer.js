@@ -92,7 +92,34 @@ const I18N = {
     queue_resume: "▶ Reanudar",
     queue_clear: "Limpiar",
     queue_all_to: "Carpeta →",
-    queue_apply_all: "Aplicar a todas",
+    queue_apply_all: "Aplicar a pendientes",
+    queue_apply_pending: "Aplicar a pendientes",
+    queue_active_h: "En espera y con error",
+    queue_completed_h: "Archivos completados",
+    queue_active_hint: "Estas opciones se usan cuando se descarga el elemento. No mueven ni convierten un archivo que ya está descargado.",
+    queue_save_to: "Guardar en",
+    queue_download_as: "Descargar como",
+    queue_clear_finished: "Quitar completados de la lista",
+    queue_remove_errors: "Quitar errores de la lista",
+    queue_add_preview: "Se añadirán {n} enlaces a {folder} como {format}",
+    queue_add_preview_one: "Se añadirá 1 enlace a {folder} como {format}",
+    queue_show: "Mostrar en el Finder",
+    queue_locate: "Localizar archivo",
+    queue_add_this_folder: "Añadir esta carpeta",
+    queue_remove_list: "Quitar de la lista",
+    queue_pl_history: "Estos archivos pueden seguir apareciendo en Historial.",
+    queue_loc_unknown: "Ubicación no registrada para este elemento antiguo",
+    queue_loc_missing: "El archivo no está en esa carpeta",
+    queue_loc_outside: "La carpeta no está en la lista de esta app — añádela como favorita para usar el archivo",
+    queue_requested: "Pedido: {format}",
+    queue_th_location: "Ubicación",
+    q_st_pending: "En espera",
+    q_st_running: "Descargando",
+    q_st_done: "Completado",
+    q_st_error: "Error",
+    q_st_skipped: "Omitido",
+    q_st_flagged: "Marcado",
+    q_st_canceled: "Cancelado",
     queue_empty: "La cola está vacía.",
     queue_summary: "{done} listas · {skip} omitidas · {err} errores",
     queue_resume_msg: "Hay elementos pendientes en la cola. ¿Continuar?",
@@ -258,7 +285,34 @@ const I18N = {
     queue_resume: "▶ Resume",
     queue_clear: "Clear",
     queue_all_to: "Folder →",
-    queue_apply_all: "Apply to all",
+    queue_apply_all: "Apply to pending",
+    queue_apply_pending: "Apply to pending",
+    queue_active_h: "Waiting and failed",
+    queue_completed_h: "Completed files",
+    queue_active_hint: "These settings apply when this item runs. They do not move or convert a file that is already downloaded.",
+    queue_save_to: "Save to",
+    queue_download_as: "Download as",
+    queue_clear_finished: "Clear finished from list",
+    queue_remove_errors: "Remove errors from list",
+    queue_add_preview: "Add {n} links to {folder} as {format}",
+    queue_add_preview_one: "Add 1 link to {folder} as {format}",
+    queue_show: "Show in Finder",
+    queue_locate: "Locate file",
+    queue_add_this_folder: "Add this folder",
+    queue_remove_list: "Remove from list",
+    queue_pl_history: "These files may still appear in History.",
+    queue_loc_unknown: "Location not recorded for this older item",
+    queue_loc_missing: "File not in that folder",
+    queue_loc_outside: "Folder is not in this app's list — add it as a favorite to use this file",
+    queue_requested: "Requested: {format}",
+    queue_th_location: "Location",
+    q_st_pending: "Waiting",
+    q_st_running: "Downloading",
+    q_st_done: "Completed",
+    q_st_error: "Error",
+    q_st_skipped: "Skipped",
+    q_st_flagged: "Flagged",
+    q_st_canceled: "Canceled",
     queue_empty: "Queue is empty.",
     queue_summary: "{done} done · {skip} skipped · {err} errors",
     queue_resume_msg: "There are pending items in the queue. Continue?",
@@ -356,6 +410,7 @@ function applyI18n() {
   renderDestinations(); renderManage(); syncHint();
   if ($("tab-hist").style.display !== "none") refreshHistory();
   if ($("tab-queue").style.display !== "none") renderQueue();
+  if (typeof updateQueueAddPreview === "function") updateQueueAddPreview();
 }
 
 // ===========================================================================
@@ -951,6 +1006,16 @@ function prettyDetails(d) {
   return d;
 }
 function lastSeg(p) { return p ? p.split("/").filter(Boolean).pop() : ""; }
+function pathDir(p) {
+  if (!p) return "";
+  const i = Math.max(String(p).lastIndexOf("/"), String(p).lastIndexOf("\\"));
+  return i >= 0 ? p.slice(0, i) : "";
+}
+function pathBase(p) {
+  if (!p) return "";
+  const i = Math.max(String(p).lastIndexOf("/"), String(p).lastIndexOf("\\"));
+  return i >= 0 ? p.slice(i + 1) : p;
+}
 
 async function refreshHistory() {
   clearHistMsg();
@@ -1838,32 +1903,109 @@ function buildQueueItemFromSelection(url, force = false) {
     error: null,
   };
 }
+// Queue-tab paste: same snapshot as Download-tab enqueue, except playlist is always false
+// (one URL per row; the playlist toggle is a Download-tab control).
+function buildQueueItemsFromPaste(urls) {
+  const destId = ($("queueAllFolder") && $("queueAllFolder").value) || "";
+  const format = $("format") ? $("format").value : "audio:mp3";
+  const bitrate = $("bitrate") ? $("bitrate").value : "320";
+  return (urls || []).map((url) => ({
+    url,
+    destId,
+    format,
+    bitrate,
+    autoTag: autoTagEnabled,
+    loudnorm: loudnormEnabled,
+    lufs: lufsValue,
+    playlist: false,
+    status: "pending",
+    title: "",
+    error: null,
+  }));
+}
+async function applyFolderToPending(destId) {
+  const q = await api.queueGet();
+  for (const item of q.filter((i) => i.status === "pending")) {
+    await api.queueUpdateItem({ id: item.id, destId });
+  }
+}
+
+function isActiveQueueStatus(status) {
+  return status !== "done";
+}
+function queueFormatLabel(format, bitrate, encodePlan, output) {
+  if (output && output.actualFormatLabel) return output.actualFormatLabel;
+  if (encodePlan && encodePlan.mode === "copy") {
+    const fmt = encodePlan.targetFormat || "audio";
+    if (encodePlan.sourceAbr != null) return `${fmt} source ~${Math.round(Number(encodePlan.sourceAbr))} kbps preserved`;
+    return `${fmt} source preserved`;
+  }
+  if (encodePlan && encodePlan.targetFormat) {
+    return encodePlan.targetBitrate ? `${encodePlan.targetFormat} ${encodePlan.targetBitrate}kbps` : String(encodePlan.targetFormat);
+  }
+  const [kind, val] = String(format || "audio:mp3").split(":");
+  if (kind === "video") return val === "original" ? t("badge_orig") : (val === "best" ? t("badge_best") : val + "p");
+  if (val === "wav" || val === "flac") return (val || "").toUpperCase();
+  const fmt = (val || "mp3").toUpperCase();
+  return bitrate ? `${fmt} · ${bitrate} kbps` : fmt;
+}
+function destLabelForId(destId) {
+  if (destId === undefined || destId === null || destId === "") return t("main_folder");
+  if (typeof destId === "string" && destId.startsWith("f:") && destId.slice(2).trim()) return destId.slice(2);
+  if (typeof destId === "string" && destId.startsWith("p:") && destId.slice(2).trim()) {
+    const fav = knownFavs.find((f) => f.path === destId.slice(2));
+    return fav ? fav.name : lastSeg(destId.slice(2));
+  }
+  return t("watch_dest_missing").replace("{name}", String(destId));
+}
+function updateQueueAddPreview() {
+  const el = $("queueAddPreview");
+  if (!el) return;
+  const n = parseLinks(($("queueInput") && $("queueInput").value) || "").length;
+  if (!n) { el.textContent = ""; return; }
+  const folder = destLabelForId($("queueAllFolder") ? $("queueAllFolder").value : "");
+  const format = queueFormatLabel($("format") ? $("format").value : "audio:mp3", $("bitrate") ? $("bitrate").value : "320");
+  const key = n === 1 ? "queue_add_preview_one" : "queue_add_preview";
+  el.textContent = t(key).replace("{n}", String(n)).replace("{folder}", folder).replace("{format}", format);
+}
+function queueStatusLabel(status) {
+  return t({ pending: "q_st_pending", running: "q_st_running", done: "q_st_done", error: "q_st_error",
+    skipped: "q_st_skipped", flagged: "q_st_flagged", canceled: "q_st_canceled" }[status] || "q_st_pending");
+}
+function queueFormatSelectHtml(item, locked) {
+  const fmtOpts = [
+    ["audio:mp3", "MP3"], ["audio:m4a", "M4A"], ["audio:wav", "WAV"], ["audio:flac", "FLAC"],
+    ["video:original", "Video Orig"], ["video:1080", "1080p"], ["video:720", "720p"],
+  ].map(([v, l]) => `<option value="${v}"${item.format === v ? " selected" : ""}>${l}</option>`).join("");
+  return `<select class="q-sel" data-row-id="${item.id}" data-field="format" ${locked ? "disabled" : ""}>${fmtOpts}</select>`;
+}
 
 // Render the queue table.
 async function renderQueue() {
-  const tbody = $("queueRows");
-  if (!tbody) return;
+  const activeBody = $("queueActiveRows") || $("queueRows");
+  const doneBody = $("queueCompletedRows");
+  if (!activeBody) return;
   const q = await api.queueGet();
-  tbody.innerHTML = "";
+  activeBody.innerHTML = "";
+  if (doneBody) doneBody.innerHTML = "";
   if (!q || !q.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:24px 0">${t("queue_empty")}</td></tr>`;
-    $("queueSummary").textContent = "";
+    activeBody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:24px 0">${t("queue_empty")}</td></tr>`;
+    if ($("queueSummary")) $("queueSummary").textContent = "";
     return;
   }
-  q.forEach(item => {
+  const active = q.filter((i) => isActiveQueueStatus(i.status));
+  const completed = q.filter((i) => i.status === "done");
+  active.forEach((item) => {
     const tr = document.createElement("tr");
     tr.className = "q-row";
     tr.dataset.id = item.id;
-
-    // Status icon
+    tr.dataset.section = "active";
     const statusMap = { pending:"q-st-pending", running:"q-st-running", done:"q-st-done", error:"q-st-error", skipped:"q-st-skipped", flagged:"q-st-flagged", canceled:"q-st-skipped" };
     const stCls = statusMap[item.status] || "q-st-pending";
     let progressHtml = "";
     if (item.status === "running") {
       progressHtml = `<span class="q-progress" id="qprog-${item.id}"></span>`;
     } else if (item.error) {
-      // Full error, wrapped (not clipped) so the real cause is always visible;
-      // title= gives the same text on hover as a fallback.
       const errText = item.errorCode === "dest_bad" ? t("dest_bad")
         : (item.needsCookies ? t("cookies_hint") : item.error);
       progressHtml = `<div class="q-err" title="${escapeHtml(errText)}">${escapeHtml(errText)}</div>`;
@@ -1876,58 +2018,124 @@ async function renderQueue() {
       : "";
     if (item.fpDup) tr.dataset.fpDup = "1";
     const canRetry = ["error", "skipped", "flagged", "canceled"].includes(item.status);
-    // Folder/format are editable until the file is actually downloaded — so an
-    // errored/skipped row can be re-pointed to a different folder or format and
-    // retried. Only "done" and the currently "running" row are locked.
-    const locked = item.status === "done" || item.status === "running";
-
-    // Folder select
-    const folderSel = `<select class="q-sel" data-row-id="${item.id}" data-field="destId" ${locked ? "disabled" : ""}>${destOptionsHtml(item.destId)}</select>`;
-
-    // Format select
-    const fmtOpts = [
-      ["audio:mp3","MP3"],["audio:m4a","M4A"],["audio:wav","WAV"],["audio:flac","FLAC"],
-      ["video:original","Video Orig"],["video:1080","1080p"],["video:720","720p"]
-    ].map(([v, l]) => `<option value="${v}"${item.format === v ? " selected" : ""}>${l}</option>`).join("");
-    const formatSel = `<select class="q-sel" data-row-id="${item.id}" data-field="format" ${locked ? "disabled" : ""}>${fmtOpts}</select>`;
-
+    const locked = item.status === "running";
+    const folderCell = locked
+      ? `<span class="q-loc">${escapeHtml(destLabelForId(item.destId))}</span>`
+      : `<select class="q-sel" data-row-id="${item.id}" data-field="destId">${destOptionsHtml(item.destId)}</select>`;
+    const formatCell = locked
+      ? `<span class="q-fmt">${escapeHtml(queueFormatLabel(item.format, item.bitrate))}</span>`
+      : queueFormatSelectHtml(item, false);
+    const stLabel = queueStatusLabel(item.status);
     tr.innerHTML = `
-      <td class="q-status"><span class="${stCls}"></span></td>
+      <td class="q-status"><span class="${stCls}" aria-label="${escapeHtml(stLabel)}"></span></td>
       <td class="q-cell"><div class="q-url" title="${escapeHtml(item.url)}">${escapeHtml(item.title || item.url)}</div>${progressHtml}${fpHtml}</td>
-      <td>${folderSel}</td>
-      <td>${formatSel}</td>
-      <td style="white-space:nowrap">
-        ${canRetry ? `<button class="sec q-retry" data-id="${item.id}" title="${t("q_retry")}">↻</button>` : ""}
-        <button class="sec q-remove" data-id="${item.id}" aria-label="${escapeHtml(t("remove") + ": " + (item.title || item.url))}" title="${escapeHtml(t("remove"))}" ${queueRunning ? "disabled" : ""}>✕</button>
-      </td>
+      <td>${folderCell}</td>
+      <td>${formatCell}</td>
+      <td><div class="q-actions">
+        ${canRetry ? `<button type="button" class="sec q-act q-retry" data-id="${item.id}" aria-label="${escapeHtml(t("q_retry") + ": " + (item.title || item.url))}">${escapeHtml(t("q_retry"))}</button>` : ""}
+        <button type="button" class="sec q-act q-remove" data-id="${item.id}" ${item.status === "running" ? "disabled" : ""} aria-label="${escapeHtml(t("queue_remove_list") + ": " + (item.title || item.url))}">${escapeHtml(t("queue_remove_list"))}</button>
+      </div></td>
     `;
-    tbody.appendChild(tr);
+    if (typeof tr.setAttribute === "function") {
+      tr.setAttribute("aria-label", `${stLabel}, ${item.title || item.url}, ${t("queue_save_to")} ${destLabelForId(item.destId)}, ${t("queue_download_as")} ${queueFormatLabel(item.format, item.bitrate)}`);
+    }
+    activeBody.appendChild(tr);
+  });
+  if (doneBody) completed.forEach((item) => {
+    const outputs = Array.isArray(item.outputs) ? item.outputs : [];
+    const identity = item.identityState || (outputs.length ? outputs[0].state : "unknown");
+    const appendCompleted = (trHtml, id, filePath) => {
+      const tr = document.createElement("tr");
+      tr.className = "q-row";
+      tr.dataset.id = id;
+      tr.dataset.section = "completed";
+      if (filePath) tr.dataset.filePath = filePath;
+      tr.innerHTML = trHtml;
+      doneBody.appendChild(tr);
+    };
+    const requested = t("queue_requested").replace("{format}", queueFormatLabel(item.format, item.bitrate));
+    if (item.playlist && identity === "unknown") {
+      appendCompleted(`
+        <td class="q-status"><span class="q-st-done" aria-label="${escapeHtml(t("q_st_done"))}"></span></td>
+        <td class="q-cell"><div class="q-url">${escapeHtml(item.title || item.url)}</div><div class="q-note">${escapeHtml(t("queue_pl_history"))}</div></td>
+        <td class="q-loc">${escapeHtml(t("queue_loc_unknown"))}</td>
+        <td class="q-fmt">${escapeHtml(requested)}</td>
+        <td><div class="q-actions">
+          <button type="button" class="sec q-act q-remove" data-id="${item.id}" aria-label="${escapeHtml(t("queue_remove_list") + ": " + (item.title || item.url))}">${escapeHtml(t("queue_remove_list"))}</button>
+        </div></td>`, item.id);
+      return;
+    }
+    const rows = outputs.length ? outputs : [{ path: "", state: identity, actualFormatLabel: queueFormatLabel(item.format, item.bitrate, item.encodePlan) }];
+    rows.forEach((out) => {
+      const loc = out.state === "present"
+        ? (lastSeg(out.path) ? lastSeg(pathDir(out.path)) : lastSeg(item.outputDir) || t("main_folder"))
+        : out.state === "missing" ? t("queue_loc_missing")
+        : out.state === "outside" ? t("queue_loc_outside")
+        : t("queue_loc_unknown");
+      const fmt = queueFormatLabel(item.format, item.bitrate, item.encodePlan, out);
+      const title = out.path ? pathBase(out.path) : (item.title || item.url);
+      const actions = [];
+      if (out.state === "present") actions.push(`<button type="button" class="sec q-act q-show" data-id="${item.id}" data-path="${escapeHtml(out.path)}" aria-label="${escapeHtml(t("queue_show") + ": " + title)}">${escapeHtml(t("queue_show"))}</button>`);
+      if (out.state === "missing" || (out.state === "unknown" && !item.playlist)) {
+        actions.push(`<button type="button" class="sec q-act q-locate" data-id="${item.id}" aria-label="${escapeHtml(t("queue_locate") + ": " + title)}">${escapeHtml(t("queue_locate"))}</button>`);
+      }
+      if (out.state === "outside" && out.path) {
+        actions.push(`<button type="button" class="sec q-act q-addfold" data-id="${item.id}" data-path="${escapeHtml(out.path)}" aria-label="${escapeHtml(t("queue_add_this_folder") + ": " + title)}">${escapeHtml(t("queue_add_this_folder"))}</button>`);
+      }
+      actions.push(`<button type="button" class="sec q-act q-remove" data-id="${item.id}" aria-label="${escapeHtml(t("queue_remove_list") + ": " + title)}">${escapeHtml(t("queue_remove_list"))}</button>`);
+      appendCompleted(`
+        <td class="q-status"><span class="q-st-done" aria-label="${escapeHtml(t("q_st_done"))}"></span></td>
+        <td class="q-cell"><div class="q-url" title="${escapeHtml(out.path || item.url)}">${escapeHtml(title)}</div>
+          ${item.playlist ? `<div class="q-note">${escapeHtml(requested)}</div>` : ""}</td>
+        <td class="q-loc" title="${escapeHtml(out.path || "")}">${escapeHtml(loc)}</td>
+        <td class="q-fmt">${escapeHtml(fmt)}</td>
+        <td><div class="q-actions">${actions.join("")}</div></td>`, item.id, out.path);
+      const last = doneBody.rows ? doneBody.rows[doneBody.rows.length - 1] : null;
+      if (last && last.setAttribute) last.setAttribute("aria-label", `${t("q_st_done")}, ${title}, ${fmt}, ${loc}`);
+    });
   });
 
-  // Retry a single skipped/errored item (force past the duplicate skip).
-  tbody.querySelectorAll(".q-retry").forEach(btn => {
+  const roots = [activeBody, doneBody].filter(Boolean);
+  const qAll = (sel) => roots.flatMap((el) => [...el.querySelectorAll(sel)]);
+  qAll(".q-retry").forEach((btn) => {
     btn.onclick = async () => {
       const q2 = await api.queueGet();
-      const it = q2.find(i => i.id === btn.dataset.id);
-      const force = !!(it && it.status === "skipped"); // override "avoid duplicates" on explicit retry
+      const it = q2.find((i) => i.id === btn.dataset.id);
+      const force = !!(it && it.status === "skipped");
       await api.queueUpdateItem({ id: btn.dataset.id, status: "pending", error: null, note: null, force, fpDup: null });
       renderQueue();
       if (!queueRunning) runQueue();
     };
   });
-
-  // Attach change handlers for per-row selects
-  tbody.querySelectorAll("select[data-row-id]").forEach(sel => {
+  qAll("select[data-row-id]").forEach((sel) => {
     sel.addEventListener("change", async () => {
       await api.queueUpdateItem({ id: sel.dataset.rowId, [sel.dataset.field]: sel.value });
     });
   });
-
-  // Attach remove handlers
-  tbody.querySelectorAll(".q-remove").forEach(btn => {
+  qAll(".q-remove").forEach((btn) => {
     btn.onclick = async () => {
       const q2 = await api.queueGet();
-      await api.queueSet(q2.filter(i => i.id !== btn.dataset.id));
+      await api.queueSet(q2.filter((i) => i.id !== btn.dataset.id));
+      renderQueue();
+    };
+  });
+  qAll(".q-show").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!api.queueRevealOutput) return;
+      await api.queueRevealOutput(btn.dataset.id, btn.dataset.path);
+    };
+  });
+  qAll(".q-locate").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!api.queueLocateFile) return;
+      await api.queueLocateFile(btn.dataset.id);
+      renderQueue();
+    };
+  });
+  qAll(".q-addfold").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!api.queueAddOutputFolder) return;
+      await api.queueAddOutputFolder(btn.dataset.id, btn.dataset.path);
       renderQueue();
     };
   });
@@ -2112,9 +2320,12 @@ $("queuePauseBtn").onclick = async () => {
   $("queuePauseBtn").textContent = queuePaused ? t("queue_resume") : t("queue_pause");
 };
 
-$("queueClearBtn").onclick = async () => {
-  await api.queueClear();
-  queueRunning = false; queueActiveId = null;
+if ($("queueClearFinishedBtn")) $("queueClearFinishedBtn").onclick = async () => {
+  if (api.queueClearFinished) await api.queueClearFinished();
+  renderQueue();
+};
+if ($("queueRemoveErrorsBtn")) $("queueRemoveErrorsBtn").onclick = async () => {
+  if (api.queueRemoveErrors) await api.queueRemoveErrors();
   renderQueue();
 };
 
@@ -2134,37 +2345,21 @@ $("queueRetryBtn").onclick = async () => {
 };
 
 $("queueAddBtn").onclick = async () => {
-  const txt = $("queueInput").value;
-  const urls = parseLinks(txt);
+  const urls = parseLinks($("queueInput").value);
   if (!urls.length) return;
-  const defaultFormat = $("format").value; // inherit current UI selection
-  const defaultBitrate = $("bitrate").value;
-  // Destination = the "Folder →" dropdown above the table. This links each
-  // batch of pasted links to the folder/playlist selected right now, so you can
-  // add one set to "Afro Dancehall", switch the dropdown, and add another set
-  // to a different folder. ("" = main folder.)
-  const defaultDestId = $("queueAllFolder").value || "";
-  const items = urls.map(url => ({
-    id: crypto.randomUUID(),
-    url,
-    destId: defaultDestId,
-    format: defaultFormat,
-    bitrate: defaultBitrate,
-    status: "pending",
-    title: "",
-    error: null,
-  }));
-  await api.queueAdd(items);
+  await api.queueAdd(buildQueueItemsFromPaste(urls));
   $("queueInput").value = "";
+  updateQueueAddPreview();
   renderQueue();
 };
 
+if ($("queueInput")) $("queueInput").addEventListener("input", updateQueueAddPreview);
+if ($("queueAllFolder")) $("queueAllFolder").addEventListener("change", updateQueueAddPreview);
+if ($("format")) $("format").addEventListener("change", updateQueueAddPreview);
+if ($("bitrate")) $("bitrate").addEventListener("change", updateQueueAddPreview);
+
 $("queueApplyAll").onclick = async () => {
-  const destId = $("queueAllFolder").value;
-  const q = await api.queueGet();
-  for (const item of q.filter(i => i.status === "pending")) {
-    await api.queueUpdateItem({ id: item.id, destId });
-  }
+  await applyFolderToPending($("queueAllFolder").value);
   renderQueue();
 };
 
