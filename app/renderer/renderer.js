@@ -112,6 +112,8 @@ const I18N = {
     queue_loc_missing: "El archivo no está en esa carpeta",
     queue_loc_outside: "La carpeta no está en la lista de esta app — añádela como favorita para usar el archivo",
     queue_requested: "Pedido: {format}",
+    queue_located: "Archivo localizado. Mostrar usa esta ubicación.",
+    queue_locate_failed: "No se pudo localizar el archivo.",
     queue_th_location: "Ubicación",
     q_st_pending: "En espera",
     q_st_running: "Descargando",
@@ -305,6 +307,8 @@ const I18N = {
     queue_loc_missing: "File not in that folder",
     queue_loc_outside: "Folder is not in this app's list — add it as a favorite to use this file",
     queue_requested: "Requested: {format}",
+    queue_located: "File located. Show uses this location.",
+    queue_locate_failed: "Could not locate that file.",
     queue_th_location: "Location",
     q_st_pending: "Waiting",
     q_st_running: "Downloading",
@@ -1227,6 +1231,18 @@ async function runOpenAction(call, where, kind) {
 }
 function clearHistMsg() { const el = $("histMsg"); if (el) el.textContent = ""; }
 
+async function handleQueueLocate(id) {
+  const el = $("queueMsg");
+  if (el) el.textContent = "";
+  const r = await api.queueLocateFile(id);
+  if (r && r.canceled) return;
+  if (el) {
+    if (r && r.ok) el.textContent = t("queue_located");
+    else el.textContent = h1Message(r, "file") || t("queue_locate_failed");
+  }
+  await renderQueue();
+}
+
 $("url").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); $("go").click(); } });
 
 // ---- folder type-to-filter ----
@@ -2128,8 +2144,7 @@ async function renderQueue() {
   qAll(".q-locate").forEach((btn) => {
     btn.onclick = async () => {
       if (!api.queueLocateFile) return;
-      await api.queueLocateFile(btn.dataset.id);
-      renderQueue();
+      await handleQueueLocate(btn.dataset.id);
     };
   });
   qAll(".q-addfold").forEach((btn) => {

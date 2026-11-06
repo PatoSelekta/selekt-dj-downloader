@@ -36,6 +36,8 @@ const SRC = [
   cutBlock(RENDERER, "function queueStatusLabel("),
   cutBlock(RENDERER, "function queueFormatSelectHtml("),
   cutBlock(RENDERER, "function canceledNote("),
+  cutBlock(RENDERER, "function h1Message("),
+  cutBlock(RENDERER, "async function handleQueueLocate("),
   cutBlock(RENDERER, "function parseLinks("),
   cutBlock(RENDERER, "function buildQueueItemsFromPaste("),
   cutBlock(RENDERER, "async function applyFolderToPending("),
@@ -137,6 +139,7 @@ test("new Queue keys exist in ES and EN; no Move/Convert/Add-local strings", () 
       "queue_apply_pending", "queue_clear_finished", "queue_remove_errors", "queue_add_preview",
       "queue_show", "queue_locate", "queue_add_this_folder", "queue_remove_list", "queue_pl_history",
       "queue_loc_unknown", "queue_loc_missing", "queue_loc_outside",
+      "queue_located", "queue_locate_failed",
     ]) {
       assert.equal(typeof I18N[lang][k], "string", lang + " " + k);
       assert.ok(I18N[lang][k].length > 0, lang + " " + k);
@@ -154,7 +157,16 @@ test("HTML has Active and Completed sections and no Move/Convert buttons", () =>
   assert.match(HTML, /id="queueClearFinishedBtn"/);
   assert.match(HTML, /id="queueRemoveErrorsBtn"/);
   assert.match(HTML, /id="queueAddPreview"/);
+  assert.match(HTML, /id="queueMsg"/);
   assert.doesNotMatch(HTML, /queueMove|queueConvert|Add local files|Move file|Convert a copy/);
+});
+
+test("Locate handler surfaces ok / cancel / error and does not swallow the result", () => {
+  assert.match(RENDERER, /async function handleQueueLocate/);
+  assert.match(RENDERER, /queueMsg/);
+  assert.match(RENDERER, /r\.canceled/);
+  assert.match(RENDERER, /r\.ok/);
+  assert.doesNotMatch(RENDERER, /await api\.queueLocateFile\([^)]+\);\s*renderQueue\(\)/);
 });
 
 test("pending and failed stay in Active; done only in Completed", T, async () => {
@@ -276,6 +288,22 @@ test("apply-to-pending does not change a done destId", T, async () => {
   await page.ctx.applyFolderToPending("f:Techno");
   assert.equal(page.store.queue.find((i) => i.id === "p").destId, "f:Techno");
   assert.equal(page.store.queue.find((i) => i.id === "d").destId, "p:/Volumes/Gone/Old");
+});
+
+test("Locate success, cancel, and error update #queueMsg", T, async () => {
+  const page = await startPage({
+    queue: [item("u", "done", { title: "Fixture Unknown.mp3", identityState: "unknown", outputs: [] })],
+  });
+  assert.equal(typeof page.ctx.handleQueueLocate, "function");
+  page.ctx.api.queueLocateFile = async () => ({ ok: true });
+  await page.ctx.handleQueueLocate("u");
+  assert.match(page.dom.$("queueMsg").textContent, /located|localizado/i);
+  page.ctx.api.queueLocateFile = async () => ({ ok: false, canceled: true });
+  await page.ctx.handleQueueLocate("u");
+  assert.equal(page.dom.$("queueMsg").textContent, "");
+  page.ctx.api.queueLocateFile = async () => ({ ok: false, code: "outside", error: "outside" });
+  await page.ctx.handleQueueLocate("u");
+  assert.match(page.dom.$("queueMsg").textContent, /outside|fuera|Could not|No se pudo|not allowed|no está permitida/i);
 });
 
 test("Show / Locate / Remove from list call the matching APIs; no file delete", T, async () => {
