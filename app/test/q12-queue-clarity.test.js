@@ -169,6 +169,44 @@ test("Locate handler surfaces ok / cancel / error and does not swallow the resul
   assert.doesNotMatch(RENDERER, /await api\.queueLocateFile\([^)]+\);\s*renderQueue\(\)/);
 });
 
+test("canceled status class is distinct from skipped; HTML defines both", () => {
+  assert.match(HTML, /\.q-st-canceled::before/);
+  assert.match(HTML, /\.q-st-skipped::before/);
+  assert.notEqual(
+    (HTML.match(/\.q-st-canceled::before\{[^}]+\}/) || [""])[0],
+    (HTML.match(/\.q-st-skipped::before\{[^}]+\}/) || [""])[0]
+  );
+});
+
+test("canceled row uses q-st-canceled, not skipped; labels differ", T, async () => {
+  const page = await startPage({
+    queue: [item("c", "canceled"), item("s", "skipped")],
+  });
+  const canceled = page.dom.active.rows.find((r) => r.dataset.id === "c");
+  const skipped = page.dom.active.rows.find((r) => r.dataset.id === "s");
+  assert.ok(canceled && skipped);
+  assert.match(canceled.innerHTML, /q-st-canceled/);
+  assert.doesNotMatch(canceled.innerHTML, /q-st-skipped/);
+  assert.match(skipped.innerHTML, /q-st-skipped/);
+  assert.doesNotMatch(skipped.innerHTML, /q-st-canceled/);
+  assert.equal(page.ctx.queueStatusLabel("canceled"), I18N.en.q_st_canceled);
+  assert.equal(page.ctx.queueStatusLabel("skipped"), I18N.en.q_st_skipped);
+  assert.notEqual(I18N.en.q_st_canceled, I18N.en.q_st_skipped);
+  assert.notEqual(I18N.es.q_st_canceled, I18N.es.q_st_skipped);
+});
+
+test("flagged is not a live Retry status; leftover row stays in Active without a retry button", T, async () => {
+  const retrySrc = cutBlock(RENDERER, '$("queueRetryBtn").onclick');
+  assert.doesNotMatch(retrySrc, /flagged/);
+  const canRetryLine = RENDERER.split("\n").find((l) => l.includes("const canRetry"));
+  assert.ok(canRetryLine);
+  assert.doesNotMatch(canRetryLine, /flagged/);
+  const page = await startPage({ queue: [item("f", "flagged")] });
+  assert.deepEqual(page.dom.active.rows.map((r) => r.dataset.id), ["f"]);
+  assert.equal(page.dom.active.querySelectorAll(".q-retry").length, 0);
+  assert.equal(page.ctx.$("queueRetryBtn").style.display, "none");
+});
+
 test("pending and failed stay in Active; done only in Completed", T, async () => {
   const page = await startPage({
     queue: [

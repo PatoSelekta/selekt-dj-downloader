@@ -524,14 +524,24 @@ ipcMain.handle("queue-add", (_e, items) => {
 });
 
 ipcMain.handle("queue-update-item", (_e, patch) => {
+  if (!patch || typeof patch.id !== "string") return { ok: false, code: "invalid", error: "Invalid queue item." };
   const q = loadQueue();
   const i = q.findIndex((x) => x.id === patch.id);
-  if (i >= 0) {
-    const safe = { ...patch };
-    for (const k of MAIN_OWNED_FIELDS) delete safe[k];
-    Object.assign(q[i], safe);
-    saveQueue(q);
+  if (i < 0) return { ok: true };
+  const safe = { ...patch };
+  for (const k of MAIN_OWNED_FIELDS) delete safe[k];
+  delete safe.id;
+  const cur = q[i].status;
+  if (Object.prototype.hasOwnProperty.call(safe, "status")) {
+    if (cur === "running" && safe.status !== "running") {
+      return { ok: false, code: "running", error: "That item is already downloading." };
+    }
+    if (safe.status === "running" && cur !== "running") {
+      return { ok: false, code: "not_allowed", error: "The queue runner owns the running state." };
+    }
   }
+  Object.assign(q[i], safe);
+  saveQueue(q);
   return { ok: true };
 });
 
@@ -628,6 +638,8 @@ ipcMain.handle("queue-clear-finished", () => {
   return { ok: true, removed: true };
 });
 ipcMain.handle("queue-remove-errors", () => {
+  // `flagged` is not a live status (queue fingerprint marks use fpDup on done rows).
+  // Still drop leftover flagged rows so an old queue.json is not stuck.
   const drop = new Set(["error", "skipped", "canceled", "flagged"]);
   saveQueue(loadQueue().filter((i) => !drop.has(i.status)));
   emitQueueChanged();
@@ -636,7 +648,18 @@ ipcMain.handle("queue-remove-errors", () => {
 
 const SelektDest = require("./renderer/destination.js");
 const DEST_BAD_TEXT = "Invalid destination for this download. Choose the folder again.";
-const queueRunner = { running: false, paused: false, stopAll: false, currentId: null };
+// Exclusive runner: idle | running | paused | stopping. `running` on queue-status
+// means the loop is alive (not idle), including paused and stopping.
+const queueRunner = { state: "idle", currentId: null };
+function runnerLive() { return queueRunner.state !== "idle"; }
+function queueRunnerStatus() {
+  return {
+    state: queueRunner.state,
+    running: runnerLive(),
+    paused: queueRunner.state === "paused",
+    currentId: queueRunner.currentId,
+  };
+}
 function emitQueueChanged() {
   if (mainWindow) mainWindow.webContents.send("queue-changed");
 }
@@ -695,12 +718,12 @@ function cancelPendingItems() {
 }
 async function runQueueLoop() {
   try {
-    while (queueRunner.running) {
-      if (queueRunner.stopAll) {
+    while (runnerLive()) {
+      if (queueRunner.state === "stopping") {
         cancelPendingItems();
         break;
       }
-      if (queueRunner.paused) {
+      if (queueRunner.state === "paused") {
         await new Promise((r) => setTimeout(r, 200));
         continue;
       }
@@ -708,7 +731,8 @@ async function runQueueLoop() {
       const item = q.find((i) => i.status === "pending");
       if (!item) {
         await new Promise((r) => setImmediate(r));
-        if (queueRunner.stopAll || !queueRunner.running) break;
+        if (queueRunner.state === "stopping" || queueRunner.state === "idle") break;
+        if (queueRunner.state === "paused") continue;
         if (!loadQueue().find((i) => i.status === "pending")) break;
         continue;
       }
@@ -758,55 +782,54 @@ async function runQueueLoop() {
         progress: null,
       });
       queueRunner.currentId = null;
-      if (queueRunner.stopAll) {
+      if (queueRunner.state === "stopping") {
         cancelPendingItems();
         break;
       }
     }
   } finally {
-    queueRunner.running = false;
-    queueRunner.paused = false;
-    queueRunner.stopAll = false;
+    queueRunner.state = "idle";
     queueRunner.currentId = null;
     emitQueueChanged();
     if (mainWindow) mainWindow.webContents.send("queue-idle");
   }
 }
 ipcMain.handle("queue-start", () => {
-  if (queueRunner.running) {
-    queueRunner.paused = false;
+  if (queueRunner.state === "paused") {
+    queueRunner.state = "running";
     emitQueueChanged();
-    return { ok: true, running: true };
+    return { ok: true, ...queueRunnerStatus() };
   }
-  queueRunner.running = true;
-  queueRunner.paused = false;
-  queueRunner.stopAll = false;
+  if (queueRunner.state === "running" || queueRunner.state === "stopping") {
+    return { ok: true, ...queueRunnerStatus() };
+  }
+  queueRunner.state = "running";
   queueRunner.currentId = null;
   setImmediate(() => { runQueueLoop(); });
-  return { ok: true, running: true };
+  return { ok: true, ...queueRunnerStatus() };
 });
 ipcMain.handle("queue-pause", () => {
-  queueRunner.paused = true;
-  emitQueueChanged();
-  return { paused: true };
+  if (queueRunner.state === "running") {
+    queueRunner.state = "paused";
+    emitQueueChanged();
+  }
+  return { paused: queueRunner.state === "paused", ...queueRunnerStatus() };
 });
 ipcMain.handle("queue-stop-all", () => {
-  queueRunner.stopAll = true;
-  cancelRequested = true;
-  killActiveChild();
-  return { ok: true };
+  if (runnerLive()) {
+    queueRunner.state = "stopping";
+    cancelRequested = true;
+    killActiveChild();
+  }
+  return { ok: true, ...queueRunnerStatus() };
 });
-ipcMain.handle("queue-status", () => ({
-  running: queueRunner.running,
-  paused: queueRunner.paused,
-  currentId: queueRunner.currentId,
-}));
+ipcMain.handle("queue-status", () => queueRunnerStatus());
 ipcMain.handle("queue-clear", () => {
-  queueRunner.stopAll = true;
-  queueRunner.running = false;
-  queueRunner.paused = false;
-  cancelRequested = true;
-  killActiveChild();
+  if (runnerLive()) {
+    queueRunner.state = "stopping";
+    cancelRequested = true;
+    killActiveChild();
+  }
   saveQueue([]);
   emitQueueChanged();
   return { ok: true };
@@ -1731,7 +1754,7 @@ app.whenReady().then(() => {
     // Reset stale "running" items only when the runner is not active (app restart).
     // A renderer reload (did-finish-load) while the main-owned loop is working
     // must not flip the active row back to pending or start a second spawn.
-    if (!queueRunner.running) {
+    if (queueRunner.state === "idle") {
       const q = loadQueue();
       let changed = false;
       q.forEach(item => { if (item.status === "running") { item.status = "pending"; changed = true; } });

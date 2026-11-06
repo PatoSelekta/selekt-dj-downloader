@@ -92,6 +92,17 @@ test("playlist three files: three outputs; favorite removed => outside", T, asyn
   });
 });
 
+test("queue-update-item retry of a non-running error still works", T, async () => {
+  await withHarness({}, async (h) => {
+    h.write("queue.json", JSON.stringify([{
+      id: "e1", status: "error", url: "https://example.com/e", error: "x",
+    }]));
+    const r = await h.invoke("queue-update-item", { id: "e1", status: "pending", error: null });
+    assert.equal(r.ok, true);
+    assert.equal((await h.invoke("queue-get"))[0].status, "pending");
+  });
+});
+
 test("queue-update-item cannot plant files; queue-set cannot invent files on a new id", T, async () => {
   await withHarness({}, async (h) => {
     h.write("queue.json", JSON.stringify([{ id: "x", status: "done", url: "https://example.com/x", destId: "" }]));
@@ -191,7 +202,7 @@ test("clear-finished removes done rows only; files and History stay", T, async (
   });
 });
 
-test("remove-errors drops error/skipped/canceled/flagged; keeps pending/running/done; no file delete", T, async () => {
+test("remove-errors drops error/skipped/canceled and leftover flagged; keeps pending/running/done; no file delete", T, async () => {
   await withHarness({}, async (h) => {
     const file = h.write("Music/Fixture Done.mp3", "D");
     h.write("queue.json", JSON.stringify([

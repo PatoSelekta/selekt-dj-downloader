@@ -1986,7 +1986,7 @@ function updateQueueAddPreview() {
 }
 function queueStatusLabel(status) {
   return t({ pending: "q_st_pending", running: "q_st_running", done: "q_st_done", error: "q_st_error",
-    skipped: "q_st_skipped", flagged: "q_st_flagged", canceled: "q_st_canceled" }[status] || "q_st_pending");
+    skipped: "q_st_skipped", canceled: "q_st_canceled" }[status] || "q_st_pending");
 }
 function queueFormatSelectHtml(item, locked) {
   const fmtOpts = [
@@ -2016,7 +2016,7 @@ async function renderQueue() {
     tr.className = "q-row";
     tr.dataset.id = item.id;
     tr.dataset.section = "active";
-    const statusMap = { pending:"q-st-pending", running:"q-st-running", done:"q-st-done", error:"q-st-error", skipped:"q-st-skipped", flagged:"q-st-flagged", canceled:"q-st-skipped" };
+    const statusMap = { pending:"q-st-pending", running:"q-st-running", done:"q-st-done", error:"q-st-error", skipped:"q-st-skipped", canceled:"q-st-canceled" };
     const stCls = statusMap[item.status] || "q-st-pending";
     let progressHtml = "";
     if (item.status === "running") {
@@ -2033,7 +2033,7 @@ async function renderQueue() {
       ? `<div class="q-fpdup" data-fp-dup="1">⚑ ${escapeHtml(t("fp_dup_head"))}${item.fpDup.matchTitle ? " — " + escapeHtml(item.fpDup.matchTitle) : ""}</div>`
       : "";
     if (item.fpDup) tr.dataset.fpDup = "1";
-    const canRetry = ["error", "skipped", "flagged", "canceled"].includes(item.status);
+    const canRetry = ["error", "skipped", "canceled"].includes(item.status);
     const locked = item.status === "running";
     const folderCell = locked
       ? `<span class="q-loc">${escapeHtml(destLabelForId(item.destId))}</span>`
@@ -2117,9 +2117,11 @@ async function renderQueue() {
     btn.onclick = async () => {
       const q2 = await api.queueGet();
       const it = q2.find((i) => i.id === btn.dataset.id);
-      const force = !!(it && it.status === "skipped");
-      await api.queueUpdateItem({ id: btn.dataset.id, status: "pending", error: null, note: null, force, fpDup: null });
+      if (!it || it.status === "running") return;
+      const force = it.status === "skipped";
+      const r = await api.queueUpdateItem({ id: btn.dataset.id, status: "pending", error: null, note: null, force, fpDup: null });
       renderQueue();
+      if (r && r.ok === false) return;
       if (!queueRunning) runQueue();
     };
   });
@@ -2157,7 +2159,7 @@ async function renderQueue() {
 
   // Summary
   const done    = q.filter(i => i.status === "done").length;
-  const skipped = q.filter(i => i.status === "skipped" || i.status === "flagged").length;
+  const skipped = q.filter(i => i.status === "skipped").length;
   const errored = q.filter(i => i.status === "error").length;
   const pending = q.filter(i => i.status === "pending").length;
   if (done + skipped + errored > 0) {
@@ -2183,11 +2185,11 @@ async function renderQueue() {
     runBtn.disabled = !q.some(i => i.status === "pending");
   }
 
-  // "Retry failed" button — visible whenever there are skipped/errored/flagged
-  // items, even while the queue runs (retries stack and get picked up in order).
+  // "Retry failed" — error and skipped only. Canceled has its own row Retry.
+  // Leftover `flagged` is not a live status (fingerprint marks use fpDup).
   const retryBtn = $("queueRetryBtn");
   if (retryBtn) {
-    retryBtn.style.display = q.some(i => ["error", "skipped", "flagged"].includes(i.status)) ? "" : "none";
+    retryBtn.style.display = q.some(i => ["error", "skipped"].includes(i.status)) ? "" : "none";
   }
 }
 
@@ -2205,12 +2207,13 @@ function updateQueueRowProgress(id, info) {
 // Dispatch-only: the sequential runner lives in main. This starts (or unpauses)
 // that loop and lets queue-changed / queue-idle keep the UI in sync.
 async function runQueue() {
-  queuePaused = false;
   try {
     const st = await api.queueStart();
-    queueRunning = !!(st && st.running);
+    queueRunning = !!(st && (st.state ? st.state !== "idle" : st.running));
+    queuePaused = !!(st && (st.state ? st.state === "paused" : st.paused));
   } catch (_) {
     queueRunning = false;
+    queuePaused = false;
   }
   renderQueue();
 }
@@ -2244,8 +2247,8 @@ async function syncQueueFromMain() {
   let st = null;
   try { st = await api.queueStatus(); } catch (_) {}
   if (st) {
-    queueRunning = !!st.running;
-    queuePaused = !!st.paused;
+    queueRunning = st.state ? st.state !== "idle" : !!st.running;
+    queuePaused = st.state ? st.state === "paused" : !!st.paused;
     queueActiveId = st.currentId || null;
   }
   const q = await api.queueGet();
@@ -2321,17 +2324,15 @@ async function updateActiveCount() {
 }
 
 // ---- Queue UI event handlers ----
-$("queueRunBtn").onclick = () => { queuePaused = false; runQueue(); };
+$("queueRunBtn").onclick = () => { runQueue(); };
 
 $("queuePauseBtn").onclick = async () => {
   if (!queueRunning) return;
-  if (queuePaused) {
-    queuePaused = false;
-    try { await api.queueStart(); } catch (_) {}
-  } else {
-    queuePaused = true;
-    try { await api.queuePause(); } catch (_) {}
-  }
+  try {
+    const st = queuePaused ? await api.queueStart() : await api.queuePause();
+    queueRunning = st && (st.state ? st.state !== "idle" : st.running);
+    queuePaused = !!(st && (st.state ? st.state === "paused" : st.paused));
+  } catch (_) {}
   $("queuePauseBtn").textContent = queuePaused ? t("queue_resume") : t("queue_pause");
 };
 
@@ -2344,11 +2345,12 @@ if ($("queueRemoveErrorsBtn")) $("queueRemoveErrorsBtn").onclick = async () => {
   renderQueue();
 };
 
-// Retry every skipped/errored/flagged item at once (skipped → forced past dup).
+// Retry every error/skipped item at once (skipped → forced past dup). Not flagged.
 $("queueRetryBtn").onclick = async () => {
   const q = await api.queueGet();
   for (const it of q) {
-    if (["error", "skipped", "flagged"].includes(it.status)) {
+    if (it.status === "running") continue;
+    if (["error", "skipped"].includes(it.status)) {
       await api.queueUpdateItem({
         id: it.id, status: "pending", error: null, note: null, fpDup: null,
         force: it.status === "skipped",

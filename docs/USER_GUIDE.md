@@ -519,10 +519,10 @@ only; it does not change completed files or their locations.
 | **▶ Run queue** | Starts the queue when it is idle. While the queue runs, this button is replaced by **Pause**. |
 | **⏸ Pause** | Stops the queue from starting the **next** item. The one already downloading keeps going. The button then reads **▶ Resume**. |
 | **Row Reintentar / Retry** | Re-queues that failed row. For a skipped duplicate it forces the download. |
-| **Retry failed** | Re-queues every row that errored, was skipped, or was flagged. **Cancelled rows are not included**; use their own Retry. |
+| **Retry failed** | Re-queues every row that errored or was skipped. **Cancelled rows are not included**; use their own Retry. Fingerprint duplicates use the ⚑ mark on completed rows (`fpDup`), not a `flagged` status. |
 | **Remove from list** | Removes that row from the list. Disabled only on the row that is currently running. **Does not delete files.** |
 | **Clear finished from list** | Removes **completed** rows from the list only. Files and History stay. |
-| **Remove errors from list** | Removes error / skipped / canceled / flagged rows. Pending, running and completed stay. Files stay. |
+| **Remove errors from list** | Removes error / skipped / canceled rows, and leftover `flagged` if an old list still has one. Pending, running and completed stay. Files stay. |
 | **Show in Finder** | Opens the folder of a completed file this app recorded and can still see. |
 | **Locate file** | Native file picker for a missing or unknown **single-file** row. Relinks **that exact file**, including one outside the main folder and favorites, without adding the folder or moving the file. Refused for unknown playlists (use History). Cancel is silent; other failures are shown on the Queue tab. |
 | **Add this folder** | Registers the file’s folder as a favorite so the app can use that path again. |
@@ -532,14 +532,16 @@ Completed location states: **present** (folder name + Show), **missing** (Locate
 **unknown** (Locate on a single file; playlists point at History). Old rows without `files[]` are recovered from
 History by URL when possible; the app does **not** guess a path from the title.
 
-Status icons: ✓ completed, a circle-slash for skipped (duplicate), ✕ for error (the message is shown under the link),
-a spinner with a percentage for running, an hourglass for pending. An amber note under a completed row is a warning,
-for example that normalization could not be completed ([details](#if-normalization-fails)).
+Status icons: ✓ completed, a circle-slash (⊘) for skipped (duplicate in folder), an en-dash (–) for canceled
+(stopped — not a duplicate), ✕ for error (the message is shown under the link), a spinner with a percentage for
+running, an hourglass for pending. An amber note under a completed row is a warning, for example that
+normalization could not be completed ([details](#if-normalization-fails)).
 
-The queue runs in the main process, one item at a time. Reloading the window does **not** restart or duplicate the
-item that is already downloading. If the **app** was killed mid-item, that row is reset to pending on the next launch
-and the Resume banner can continue the rest. **[Unit-tested]** (stubs). Packaged Mac GUI for this Queue layout is
-**not** claimed from the Linux VM.
+The queue runs in the main process, one item at a time. The runner is one of **idle**, **running**, **paused**, or
+**stopping** — not four independent switches. **Pause** does not cancel the current download. Reloading the window
+does **not** restart or duplicate the item that is already downloading. If the **app** was killed mid-item, that
+row is reset to pending on the next launch and the Resume banner can continue the rest. **[Unit-tested]** (stubs).
+Packaged Mac GUI for this Queue layout is **not** claimed from the Linux VM.
 
 ### Clearing a queue is not deleting files
 
