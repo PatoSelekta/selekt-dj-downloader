@@ -85,17 +85,20 @@ test("source guard: the renderer sends item.id as _queueId and the queue-mode ha
 });
 
 test("reachability guard: the single-download path (the only source of single-mode warnings and offers) has no entry point from the controls", () => {
-  // Every Download-button press, playlist-picker download, watch-folder item and Retry goes through the queue
-  // runner, which always sends _inQueue. runDownload() is the only other api.download caller; it is invoked only
-  // by "Download anyway" (dupForce), whose pendingDupOpts exists only after runDownload itself showed that
-  // warning. So nothing can start it. If this guard fails, a new entry point exists and the single-mode warning
-  // (offerId, Delete new, Keep both) must be verified end-to-end again, not only by the injected-event browser check.
+  // Every Download-button press, playlist-picker download, watch-folder item and Retry goes through the main
+  // queue runner, which always sends _inQueue. runDownload() is the only renderer api.download caller; it is
+  // invoked only by "Download anyway" (dupForce), whose pendingDupOpts exists only after runDownload itself
+  // showed that warning. So nothing can start it. If this guard fails, a new entry point exists and the
+  // single-mode warning (offerId, Delete new, Keep both) must be verified end-to-end again.
   const src = fs.readFileSync(path.join(__dirname, "..", "renderer", "renderer.js"), "utf8");
+  const main = fs.readFileSync(path.join(__dirname, "..", "main.js"), "utf8");
   const n = (re) => (src.match(re) || []).length;
-  assert.equal(n(/await api\.download\(/g), 2, "api.download callers: runDownload + the queue runner");
+  assert.equal(n(/await api\.download\(/g), 1, "api.download callers: runDownload only (queue path dispatches queue-start)");
   assert.equal(n(/\brunDownload\(/g), 2, "runDownload: its definition + the single call in dupForce");
   assert.match(src, /\$\("dupForce"\)\.onclick = async \(\) => \{\s*hideDupWarning\(\);\s*if \(pendingDupOpts\) await runDownload\(pendingDupOpts\);/);
   assert.equal(n(/\bshowDupWarning\(/g), 2, "showDupWarning: its definition + the single call inside runDownload");
   assert.equal(n(/pendingDupOpts = \{/g), 1, "pendingDupOpts is only ever set by showDupWarning");
-  assert.equal(n(/_inQueue: true,/g), 1, "the queue runner's opts builder is the only other place that builds download opts");
+  assert.match(src, /api\.queueStart\(/);
+  assert.match(main, /_inQueue: true,/);
+  assert.match(main, /_queueId: item\.id/);
 });

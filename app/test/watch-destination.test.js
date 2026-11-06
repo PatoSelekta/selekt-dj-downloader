@@ -5,7 +5,7 @@
 // What runs here: the REAL app/main.js (via h3-harness.js: isolated temp userData, fake yt-dlp/ffmpeg, no network, a
 // stubbed file watcher), the REAL Settings code cut out of renderer.js (run in a small fake page: it is NOT a real
 // window), and the shared destId -> options module the renderer also loads. A watched item is "run" the way
-// h3-harness.runQueueLikeRenderer mirrors renderer.runQueue. All folders live under a temp dir.
+// h3-harness.runQueueLikeRenderer starts the production main queue runner. All folders live under a temp dir.
 // NOT covered: the real iCloud/Dropbox inbox, a real chokidar watcher, a real window or a real download.
 // Run:  node --test app/test/watch-destination.test.js
 const test = require("node:test");
@@ -181,7 +181,8 @@ test("a saved favorite that was removed afterwards: shown as unavailable (not as
     await runQueueLikeRenderer(h);
     const item = (await queued(h))[0];
     assert.equal(item.status, "error");
-    assert.match(item.error, /favorite/i);
+    assert.match(item.error, /can't use that location/);
+    assert.equal(item.errorCode, "dest_bad");
     assert.deepEqual(h.ytdlpCalls(), [], "nothing was started");
     assert.deepEqual(filesIn(h.music), []);
     assert.deepEqual(filesIn(path.join(h.music, "Techno")), []);
@@ -238,7 +239,8 @@ test("a registered favorite whose folder is missing is recreated at the same pat
 test("contract: the renderer uses `destid` for the watch destination (the old `folder` field is gone) and main.js reads watch_destid", T, () => {
   assert.doesNotMatch(WATCH_SRC, /watchSet\(\{\s*folder:/);
   assert.doesNotMatch(WATCH_SRC, /watchSettings\.folder/);
-  assert.match(RENDERER, /data-field="destId" \$\{locked \? "disabled" : ""\}>\$\{destOptionsHtml\(item\.destId\)\}<\/select>/, "Queue rows show a stale destination as unavailable too");
+  assert.match(RENDERER, /data-field="destId">\$\{destOptionsHtml\(item\.destId\)\}<\/select>/, "pending Queue rows still show a stale destination as unavailable");
+  assert.doesNotMatch(RENDERER, /data-field="destId" \$\{locked \? "disabled"/, "completed/running rows are not disabled dest selects");
   assert.doesNotMatch(RENDERER, /destOptionsHtml\(item\.destId \|\|/, "a falsy stored value must not be turned into the main folder before display");
   assert.match(WATCH_SRC, /api\.watchSet\(\{ destid: value \}\)/);
   assert.match(WATCH_SRC, /watchSettings\.destid/);

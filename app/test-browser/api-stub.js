@@ -11,7 +11,8 @@
     histCalls: 0, histHold: false, histWaiters: [],
     deleteManual: false, deleteCalls: [], deleteWaiters: [], deleteResult: { ok: true },
     dismissals: [], reveals: [], unknown: [],
-    h: { fp: [], progress: [], setup: [], queueChanged: [], queueRun: [] },
+    h: { fp: [], progress: [], setup: [], queueChanged: [], queueRun: [], queueIdle: [] },
+    qCtl: { running: false, paused: false, stopAll: false },
   });
 
   // ---- test controls -------------------------------------------------------------------------
@@ -19,6 +20,8 @@
   ctl.settleDelete = (i, result) => ctl.deleteWaiters[i](result === undefined ? { ok: true } : result);
   ctl.finishDownload = (i, result) => {
     const d = ctl.downloads[i];
+    if (d.settled) return;
+    d.settled = true;
     const r = result || { ok: true, count: 1, files: ["/Users/test/Music/dl" + i + ".mp3"], folder: "/Users/test/Music" };
     d.files = r.files || [];
     d.settle(r);
@@ -49,6 +52,82 @@
     return payload;
   };
 
+  const emitQC = () => ctl.h.queueChanged.forEach(cb => cb());
+  const emitIdle = () => ctl.h.queueIdle.forEach(cb => cb());
+  const itemToOpts = (item) => {
+    const [kind, val] = String(item.format || "audio:mp3").split(":");
+    const isPlaylist = !!item.playlist;
+    const opts = {
+      url: item.url,
+      type: isPlaylist ? "playlist" : (kind === "audio" ? "audio" : "video"),
+      audioFormat: kind === "audio" ? val : undefined,
+      bitrate: item.bitrate || "320",
+      quality: kind === "video" ? val : undefined,
+      noConvert: val === "original" || undefined,
+      force: !!item.force,
+      autoTag: item.autoTag, loudnorm: item.loudnorm, lufs: item.lufs,
+      _inQueue: true, _queueId: item.id,
+    };
+    if (isPlaylist && kind === "audio") opts.audioOnly = true;
+    if (isPlaylist && Array.isArray(item.playlistItems) && item.playlistItems.length) opts.playlistItems = item.playlistItems;
+    const destId = item.destId;
+    if (destId === undefined || destId === null || destId === "") opts.folder = "";
+    else if (typeof destId === "string" && destId.startsWith("f:") && destId.slice(2).trim()) opts.folder = destId.slice(2);
+    else if (typeof destId === "string" && destId.startsWith("p:") && destId.slice(2).trim()) opts.targetPath = destId.slice(2);
+    else opts.destInvalid = true;
+    return opts;
+  };
+  const download = (opts) => new Promise(res => { ctl.downloads.push({ opts: clone(opts), files: [], settle: res }); });
+  async function runStubQueue() {
+    try {
+      while (ctl.qCtl.running) {
+        if (ctl.qCtl.stopAll) {
+          ctl.queue.forEach(it => { if (it.status === "pending") { it.status = "canceled"; it.note = "Cancelled — ↻ to retry"; } });
+          emitQC();
+          break;
+        }
+        if (ctl.qCtl.paused) { await new Promise(r => setTimeout(r, 30)); continue; }
+        const item = ctl.queue.find(i => i.status === "pending");
+        if (!item) break;
+        item.status = "running";
+        emitQC();
+        const opts = itemToOpts(item);
+        let r;
+        if (opts.destInvalid) r = { ok: false, error: "This app can't use that location. Choose the folder again.", errorCode: "dest_bad" };
+        else r = await download(opts);
+        if (r && r.ok) {
+          item.status = "done";
+          item.error = null;
+          if (r.files && r.files[0]) item.title = r.files[0].split("/").pop();
+          item.files = r.files || null;
+          item.outputDir = r.folder || null;
+        } else if (r && r.canceled) {
+          item.status = "canceled";
+          item.note = "Cancelled — ↻ to retry";
+        } else if (r && (r.duplicate || r.skipped)) {
+          item.status = "skipped";
+          item.note = "Already in folder (duplicate) — ↻ to download anyway";
+        } else {
+          item.status = "error";
+          item.error = (r && r.error) || "download failed";
+          item.errorCode = (r && r.errorCode) || null;
+        }
+        emitQC();
+        if (ctl.qCtl.stopAll) {
+          ctl.queue.forEach(it => { if (it.status === "pending") { it.status = "canceled"; it.note = "Cancelled — ↻ to retry"; } });
+          emitQC();
+          break;
+        }
+      }
+    } finally {
+      ctl.qCtl.running = false;
+      ctl.qCtl.paused = false;
+      ctl.qCtl.stopAll = false;
+      emitQC();
+      emitIdle();
+    }
+  }
+
   // ---- window.api ---------------------------------------------------------------------------
   const impl = {
     getSettings: async () => ({ lang: "en", main_folder: "/Users/test/Music", prevent_duplicates: false, auto_tag: false,
@@ -73,8 +152,47 @@
       return { ok: true };
     },
     queueSet: async (q) => { ctl.queue = clone(q); return { ok: true }; },
-    queueClear: async () => { ctl.queue = []; return { ok: true }; },
-    download: (opts) => new Promise(res => { ctl.downloads.push({ opts: clone(opts), files: [], settle: res }); }),
+    queueClear: async () => {
+      ctl.qCtl.stopAll = true;
+      ctl.qCtl.running = false;
+      ctl.qCtl.paused = false;
+      ctl.queue = [];
+      emitQC();
+      return { ok: true };
+    },
+    queueClearFinished: async () => {
+      ctl.queue = ctl.queue.filter((i) => i.status !== "done");
+      emitQC();
+      return { ok: true, removed: true };
+    },
+    queueRemoveErrors: async () => {
+      const drop = new Set(["error", "skipped", "canceled", "flagged"]);
+      ctl.queue = ctl.queue.filter((i) => !drop.has(i.status));
+      emitQC();
+      return { ok: true, removed: true };
+    },
+    queueRevealOutput: async (id, p) => { ctl.reveals.push([id, p]); return { ok: true }; },
+    queueLocateFile: async () => ({ ok: false, canceled: true }),
+    queueAddOutputFolder: async () => ({ ok: true }),
+    queueStart: async () => {
+      if (ctl.qCtl.running) { ctl.qCtl.paused = false; emitQC(); return { ok: true, running: true }; }
+      ctl.qCtl.running = true;
+      ctl.qCtl.paused = false;
+      ctl.qCtl.stopAll = false;
+      setTimeout(() => { runStubQueue(); }, 0);
+      return { ok: true, running: true };
+    },
+    queuePause: async () => { ctl.qCtl.paused = true; emitQC(); return { paused: true }; },
+    queueCancel: async () => {
+      const d = [...ctl.downloads].reverse().find((x) => x.opts && x.opts._inQueue && !x.settled);
+      if (!d) return { ok: true, killed: false };
+      d.settled = true;
+      d.settle({ ok: false, canceled: true });
+      return { ok: true, killed: true };
+    },
+    queueStopAll: async () => { ctl.qCtl.stopAll = true; return { ok: true }; },
+    queueStatus: async () => ({ running: ctl.qCtl.running, paused: ctl.qCtl.paused, currentId: (ctl.queue.find(i => i.status === "running") || {}).id || null }),
+    download,
     deleteFile: (p, offerId) => {
       ctl.deleteCalls.push([p, offerId]);
       if (!ctl.deleteManual) return Promise.resolve(clone(ctl.deleteResult));
@@ -88,6 +206,7 @@
     onSetupStatus: (cb) => ctl.h.setup.push(cb),
     onQueueChanged: (cb) => ctl.h.queueChanged.push(cb),
     onQueueRun: (cb) => ctl.h.queueRun.push(cb),
+    onQueueIdle: (cb) => ctl.h.queueIdle.push(cb),
     watchGet: async () => ({}),
   };
   window.api = new Proxy(impl, {

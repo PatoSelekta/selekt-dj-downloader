@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Q1+Q2 Queue fixture — labeled fixture data, not a user library</title>
+<style>
+  :root{
+    --bg:#0a0a0e;--bg2:#101015;--panel:#16161d;--line:#2a2a36;
+    --text:#f3f4f7;--muted:#9a9aa8;--faint:#6b6b78;--accent:#e50914;--ok:#36d399;
+    --r:15px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:15px}
+  .banner{background:#3b2a00;color:#f5d020;padding:10px 16px;font-size:13px;font-weight:700;letter-spacing:.03em}
+  .wrap{max-width:980px;margin:0 auto;padding:20px 18px 40px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px}
+  h2{font-size:12.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.09em;margin:0 0 14px}
+  h3{font-size:15px;margin:0 0 6px}
+  .q-hint{font-size:12px;color:var(--muted);margin:8px 0 12px;max-width:52em;line-height:1.45}
+  .q-preview{font-size:13px;color:var(--muted);margin:0 0 16px}
+  .q-section{margin-top:22px}
+  .q-table{width:100%;border-collapse:collapse}
+  .q-table th{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.07em;
+    padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
+  .q-row td{padding:8px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+  .q-url{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted)}
+  .q-note{color:#f5a623;font-size:11px;margin-top:4px}
+  .q-err{color:#ff6b6b;font-size:11px;margin-top:4px}
+  .q-loc,.q-fmt{font-size:13px}
+  .q-fmt{color:var(--muted)}
+  .q-actions{display:flex;flex-wrap:wrap;gap:8px}
+  button{background:#1d1d27;border:1px solid var(--line);color:var(--text);border-radius:11px;
+    min-height:44px;padding:0 12px;font-size:13px;font-weight:700}
+  select{min-height:44px;padding:6px 8px;font-size:13px;border-radius:8px;background:var(--bg2);color:var(--text);border:1px solid var(--line)}
+  .q-st-pending::before{content:"⏳"}
+  .q-st-running::before{content:"⟳"}
+  .q-st-done::before{content:"✓";color:var(--ok)}
+  .q-st-error::before{content:"✕";color:#ff6b6b}
+  .q-st-skipped::before{content:"⊘";color:#f5a623}
+</style>
+</head>
+<body>
+  <div class="banner">FIXTURE DATA — not a user library. Titles are labeled Fixture* only.</div>
+  <div class="wrap">
+    <div class="card">
+      <h2>Download queue (fixture)</h2>
+      <p class="q-preview">Add 2 links to Afro as MP3 · 320 kbps</p>
+
+      <section class="q-section" aria-labelledby="queue-active-h">
+        <h3 id="queue-active-h">Waiting and failed</h3>
+        <p class="q-hint">These settings apply when this item runs. They do not move or convert a file that is already downloaded.</p>
+        <table class="q-table">
+          <thead>
+            <tr><th>Status</th><th>Link / Title</th><th>Save to</th><th>Download as</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr class="q-row">
+              <td><span class="q-st-pending" aria-label="Waiting"></span></td>
+              <td><div class="q-url">Fixture Pending Link</div></td>
+              <td><select aria-label="Save to"><option selected>Afro</option></select></td>
+              <td><select aria-label="Download as"><option selected>MP3</option></select></td>
+              <td><div class="q-actions"><button type="button">Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-running" aria-label="Downloading"></span></td>
+              <td><div class="q-url">Fixture Running Track</div><div class="q-note">42%</div></td>
+              <td class="q-loc">Afro</td>
+              <td class="q-fmt">MP3 · 320 kbps</td>
+              <td><div class="q-actions"><button type="button" disabled>Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-error" aria-label="Error"></span></td>
+              <td><div class="q-url">Fixture Bad Dest</div><div class="q-err">Invalid destination for this download. Choose the folder again.</div></td>
+              <td><select aria-label="Save to"><option selected disabled>⚠ Folder unavailable: garbage — choose another</option><option>Afro</option></select></td>
+              <td><select aria-label="Download as"><option selected>MP3</option></select></td>
+              <td><div class="q-actions"><button type="button">Retry</button><button type="button">Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-skipped" aria-label="Skipped"></span></td>
+              <td><div class="q-url">Fixture Skipped Dup</div><div class="q-note">Already in the folder (duplicate)</div></td>
+              <td><select aria-label="Save to"><option selected>Afro</option></select></td>
+              <td><select aria-label="Download as"><option selected>MP3</option></select></td>
+              <td><div class="q-actions"><button type="button">Retry</button><button type="button">Remove from list</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="q-section" aria-labelledby="queue-completed-h">
+        <h3 id="queue-completed-h">Completed files</h3>
+        <table class="q-table">
+          <thead>
+            <tr><th>Status</th><th>Link / Title</th><th>Location</th><th>Format</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr class="q-row">
+              <td><span class="q-st-done" aria-label="Completed"></span></td>
+              <td><div class="q-url">Fixture Tone 1kHz.mp3</div></td>
+              <td class="q-loc">Afro</td>
+              <td class="q-fmt">mp3 source preserved</td>
+              <td><div class="q-actions"><button type="button">Show in Finder</button><button type="button">Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-done" aria-label="Completed"></span></td>
+              <td><div class="q-url">Fixture Missing.mp3</div></td>
+              <td class="q-loc">File not in that folder</td>
+              <td class="q-fmt">mp3</td>
+              <td><div class="q-actions"><button type="button">Locate file</button><button type="button">Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-done" aria-label="Completed"></span></td>
+              <td><div class="q-url">Fixture USB Track.mp3</div></td>
+              <td class="q-loc">Folder is not in this app's list — add it as a favorite to use this file</td>
+              <td class="q-fmt">mp3</td>
+              <td><div class="q-actions"><button type="button">Add this folder</button><button type="button">Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-done" aria-label="Completed"></span></td>
+              <td><div class="q-url">Fixture Unknown.mp3</div></td>
+              <td class="q-loc">Location not recorded for this older item</td>
+              <td class="q-fmt">Requested: MP3 · 320 kbps</td>
+              <td><div class="q-actions"><button type="button">Locate file</button><button type="button">Remove from list</button></div></td>
+            </tr>
+            <tr class="q-row">
+              <td><span class="q-st-done" aria-label="Completed"></span></td>
+              <td><div class="q-url">Fixture Playlist A</div><div class="q-note">These files may still appear in History.</div></td>
+              <td class="q-loc">Location not recorded for this older item</td>
+              <td class="q-fmt">Requested: MP3 · 320 kbps</td>
+              <td><div class="q-actions"><button type="button">Remove from list</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+</body>
+</html>

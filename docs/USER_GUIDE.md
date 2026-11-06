@@ -272,8 +272,8 @@ A new session starts with these values:
 
 | Setting | Default | Remembered between launches? |
 |---|---|---|
-| Format | **MP3** | No |
-| Audio quality | **320 kbps** | No |
+| Format | **MP3** | Yes, once you change it |
+| Audio quality | **320 kbps** | Yes, once you change it |
 | Normalize | **On**, target **−14 LUFS** | Yes, once you change it |
 | Avoid duplicates | **On** | Yes, once you change it |
 | Auto-tag | **On** | Yes, once you change it |
@@ -291,8 +291,17 @@ gives a bigger file with the same 128-kbps-quality sound. Converting to **WAV or
 stores the same limited sound in a larger file. Converting between lossy formats (for example opus to MP3) also adds
 a further generation of loss. Check the *Source: ~N kbps* line on the preview card before you choose a format.
 
-If you choose **WAV or FLAC** and the detected source is below 320 kbps, the app asks you to confirm first.
-**[Unit-tested]**. There is no equivalent prompt for MP3.
+If you choose **WAV, FLAC, MP3 or M4A** and the detected source bitrate is below the quality you picked, the app
+asks you to confirm first. **[Unit-tested]**.
+
+When **Normalize is off** and the source is already the format you asked for (lossless, or lossy at or above the
+chosen bitrate), the app **copies** that audio instead of converting it again. If the source codec matches but
+its bitrate is **unknown** (common for a direct media file), it also copies and does **not** claim the requested
+bitrate — History says *source preserved*, and `encodePlan.sourceAbr` stays null. Normalize on, a different
+container/codec, or a *known* lower source bitrate still converts (with an upsample warning when quality cannot
+increase). **[Unit-tested]** on the production download and queue-start path. A Mac real-engine run of the
+previous build preserved a 192 kbps MP3 while reporting `convert`/320; that reporting bug is fixed here. The
+fix itself was not re-run on a Mac in this pass.
 
 ### The four switches
 
@@ -300,7 +309,7 @@ If you choose **WAV or FLAC** and the detected source is below 320 kbps, the app
 |---|---|---|
 | **Download list** (playlist) | Treats the link as a playlist and opens a track picker. | Off by default; see [Playlists](#playlists). |
 | **Avoid duplicates** | Skips a download when the same video ID has already been saved with the same file extension in the same folder. | Playlist downloads skip this check. **[Unit-tested]** |
-| **Auto-tag** | Writes metadata into the audio file after download: title, artist, genre and a comment with the source link. | Genre is the **destination folder's name**. Artist and title come from the site's data, or are guessed from an "Artist - Title" pattern, else the uploader. WAV files are not tagged. The write happens without re-encoding. Failures are silent. **[Unit-tested]**; real tag read-back **[Not tested]**. |
+| **Auto-tag** | Writes metadata into the audio file after download: title, artist, genre and a comment with the source link. | Genre is the **destination folder's name**. Artist and title come from the site's data, or are guessed from an "Artist - Title" pattern, else the uploader. WAV files are not tagged. The write happens without re-encoding. If tagging fails, the file is still kept and the row shows *tagging incomplete*. **[Unit-tested]**; real tag read-back **[Not tested]**. |
 | **Normalize** | Evens out loudness to a target using ffmpeg's `loudnorm` filter in two passes (measure, then apply). | See below. |
 
 **Avoid duplicates in detail.** The app keeps its own record of what it downloaded (a file separate from History, so
@@ -322,9 +331,11 @@ the correction in a second pass (linear mode). The file is **re-encoded** (MP3 a
 and so on) and this happens **before** tagging. Things to know:
 
 - Re-encoding after conversion adds one more generation of lossy compression.
-- A loud target such as −9 LUFS can run into the peak limit. ffmpeg's documentation says linear mode can fall back
-  to dynamic processing when the file cannot reach the target without exceeding the allowed peak. Expect different
-  tracks to behave differently, and listen to the result. Measured examples are below.
+- A loud target such as −9 LUFS can run into the peak limit. After the second pass the app **measures** integrated
+  loudness and true peak before it replaces your file. If true peak is above −1.0 dBTP, the original file is kept
+  and you get a warning. If loudness missed the target by more than 1 LU but true peak is safe, the normalized file
+  is kept and you get an honest “did not reach target” warning. There is **no extra limiter**. **[Unit-tested]**;
+  this Mac packaging/runtime was **[Not tested]** in this pass.
 - If normalisation cannot be completed, the app **tells you** and keeps your file, with its audio at the original loudness (next section).
 
 ### If normalization fails
@@ -388,14 +399,14 @@ normalization).*
 - ↻ runs the whole download again, including the files that were already normalized. How yt-dlp treats files that are
   already there on that second run, and what normalizing an already-normalized file does, were **not tested**; if in
   doubt, move the kept files away first.
-- A Cancel pressed after normalization has finished, during the short tagging step, is not acted on: the item completes
-  (and the files really are normalized, so the result and the folder agree).
+- A Cancel pressed during Auto-tag stops that ffmpeg write: the original audio is kept, the `.tag` temp file is
+  removed, the item ends as *Cancelled*, and there is still no History row. Files already normalized stay as they were.
 
 **Limits**
 
 - There is no "normalize this file again" button. To try again, download it again (for a finished item, answer
   *download anyway* to the duplicate prompt).
-- **Auto-tag** failures are still silent.
+- **Auto-tag** failures now leave a *tagging incomplete* note on the row (the file is still kept).
 
 **Evidence for this behaviour**
 
@@ -475,9 +486,11 @@ the duplicate check, and audio-fingerprint detection does not run on them.
 *Figure 3. The progress card (simulated, 62 %). (1) current item, (2) progress bar with speed and time left,
 (3) how many items are waiting, (4) **Stop all**, (5) **Cancel**.*
 
-- **Cancel** stops the **current** item and the queue moves on to the next. Leftover partial files (`.part`, `.ytdl`,
-  `.temp`) are cleaned up.
-- **Stop all** cancels the current item and marks everything still waiting as *Cancelled — ↻ to retry*.
+- **Cancel** stops the **current** queue item (including a yt-dlp info probe or Auto-tag ffmpeg still running for
+  that item) and the queue moves on to the next. Leftover partial files (`.part`, `.ytdl`, `.temp`) are cleaned up.
+  Finished audio is kept if Cancel arrives during Normalize or Auto-tag.
+- **Stop all** cancels the current queue item and marks everything still waiting as *Cancelled — ↻ to retry*. It does
+  not cancel a leftover one-off download started outside the queue.
 - These two buttons live on the **Download** tab only. If you are on another tab, switch back to the Download tab.
 - Cancelling while the card says *Normalizing…* ends the item as cancelled but **keeps the finished download(s)**. In a
   list, files that were already normalized stay normalized and the note says how many; see
@@ -490,38 +503,54 @@ also **[Measured]** with real ffmpeg (see the section above).
 
 ## The Queue
 
-![The Queue tab: 1 paste box, 2 Folder selector, 3 Pause, 4 Retry failed, 5 Clear, 6 status column with done, skipped, error, running and pending rows, 7 the per-row retry button.](images/04-queue-tab.png)
+The Queue tab is split into **Waiting and failed** (Active) and **Completed files**. Pending folder and format
+are **download instructions**. Completed rows show the **actual** folder and format for each file — not a disabled
+dropdown that looks editable. **Move file**, **Convert a copy**, and **Add local files** are not in this build.
 
-*Figure 4. The Queue tab with synthetic items in each state. (1) paste one or more links, one per line, (2) folder for
-new items, (3) Pause, (4) Retry failed, (5) Clear, (6) status icon, (7) retry for one row.*
+![Labeled fixture Queue: Active waiting/failed rows with Save to / Download as selects; Completed rows with real folder, source-preserved format, Show / Locate / Add this folder / Remove from list. Banner says FIXTURE DATA.](images/10-queue-q12-fixture.png)
 
-**Add:** paste one or more links (one per line), choose a folder, click **Add to queue**. **Apply to all** sets the
-chosen folder on every item. Each row has its own folder and format list (the row format list does not include
-*Best quality* video).
+*Figure 10. Q1+Q2 Queue layout using labeled **fixture** titles only (`Fixture Tone 1kHz.mp3`, `Fixture Playlist A`, …). Not a user library.*
+
+**Add:** paste one or more links (one per line). A confirm line says how many links will go to which folder as which
+format. **Add to queue** snapshots the current folder, format, bitrate, Auto-tag, Normalize and LUFS on those rows
+(`playlist` is always off here — one URL per row). **Apply to pending** sets the chosen folder on **pending** rows
+only; it does not change completed files or their locations.
 
 | Action | What it does |
 |---|---|
 | **▶ Run queue** | Starts the queue when it is idle. While the queue runs, this button is replaced by **Pause**. |
 | **⏸ Pause** | Stops the queue from starting the **next** item. The one already downloading keeps going. The button then reads **▶ Resume**. |
-| **Row ↻ (retry)** | Re-queues that row. For a skipped duplicate it forces the download. |
-| **Retry failed** | Re-queues every row that errored, was skipped, or was flagged. **Cancelled rows are not included**; use their own ↻. |
-| **Row ✕** | Removes that row. Disabled while the queue is running. |
-| **Clear** | Empties the **list** (see below). |
+| **Row Reintentar / Retry** | Re-queues that failed row. For a skipped duplicate it forces the download. |
+| **Retry failed** | Re-queues every row that errored or was skipped. **Cancelled rows are not included**; use their own Retry. Fingerprint duplicates use the ⚑ mark on completed rows (`fpDup`), not a `flagged` status. |
+| **Remove from list** | Removes that row from the list. Disabled only on the row that is currently running. **Does not delete files.** |
+| **Clear finished from list** | Removes **completed** rows from the list only. Files and History stay. |
+| **Remove errors from list** | Removes error / skipped / canceled rows, and leftover `flagged` if an old list still has one. Pending, running and completed stay. Files stay. |
+| **Show in Finder** | Opens the folder of a completed file this app recorded and can still see. |
+| **Locate file** | Native file picker for a missing or unknown **single-file** row. Relinks **that exact file**, including one outside the main folder and favorites, without adding the folder or moving the file. Refused for unknown playlists (use History). Cancel is silent; other failures are shown on the Queue tab. |
+| **Add this folder** | Registers the file’s folder as a favorite so the app can use that path again. |
 | Cancel / Stop all | On the Download tab; see [above](#progress-cancel-and-stop-all). |
 
-Status icons: ✓ done, a circle-slash for skipped (duplicate), ✕ for error (the message is shown under the link),
-a spinner with a percentage for running, an hourglass for pending. An amber note under a ✓ row is a warning, for
-example that normalization could not be completed ([details](#if-normalization-fails)).
+Completed location states: **present** (folder name + Show), **missing** (Locate), **outside** (Add this folder),
+**unknown** (Locate on a single file; playlists point at History). Old rows without `files[]` are recovered from
+History by URL when possible; the app does **not** guess a path from the title.
 
-On launch, if items were pending when the app last closed, a **Resume** banner offers to continue; items that were
-"running" at that moment are reset to pending. **[Unit-tested]**.
+Status icons: ✓ completed, a circle-slash (⊘) for skipped (duplicate in folder), an en-dash (–) for canceled
+(stopped — not a duplicate), ✕ for error (the message is shown under the link), a spinner with a percentage for
+running, an hourglass for pending. An amber note under a completed row is a warning, for example that
+normalization could not be completed ([details](#if-normalization-fails)).
+
+The queue runs in the main process, one item at a time. The runner is one of **idle**, **running**, **paused**, or
+**stopping** — not four independent switches. **Pause** does not cancel the current download. Reloading the window
+does **not** restart or duplicate the item that is already downloading. If the **app** was killed mid-item, that
+row is reset to pending on the next launch and the Resume banner can continue the rest. **[Unit-tested]** (stubs).
+Packaged Mac GUI for this Queue layout is **not** claimed from the Linux VM.
 
 ### Clearing a queue is not deleting files
 
-**Clear only empties the queue list.** It does **not** delete any downloaded file, and it does **not** erase
-History or the duplicate record. Likewise **Clear history** only removes History rows; the files stay in your folders.
-The app has no button that deletes your downloaded music. (Clear does not cancel a download already in progress.
-See [Known quirks](#known-quirks).)
+**Clear finished from list** and **Remove errors from list** only change the queue list. They do **not** delete any
+downloaded file, and they do **not** erase History or the duplicate record. Likewise **Clear history** only removes
+History rows; the files stay in your folders. The app has no Queue button that deletes your downloaded music.
+(The older nuclear **Clear** that emptied the whole list and cancelled the running child is no longer on this tab.)
 
 ---
 
@@ -540,9 +569,10 @@ History lists the last 50 downloads, newest first, with a format badge, the fold
 - **Show** reveals the file in Finder. (The button is labelled **Show**.)
 - **Copy link** copies the original source link to the clipboard.
 
-Play and Show only work for files recorded in History that are still inside your main folder or one of your favourites.
-Otherwise you see a message such as *That file is outside the main folder and your favorite folders…* or
-*File not found…*.
+Play and Show work for files recorded in History that are still inside your main folder or a favourite, **or** for a
+file you later **Located** (that exact file only). A file whose favourite was removed and that was never Located stays
+blocked. Otherwise you see a message such as *This app can't use that location. It's not in the main folder or your
+favorites…* or *File not found…*. The same location wording is used on Queue Show/Locate and in History.
 
 **What has and has not been checked**
 
@@ -592,7 +622,8 @@ your signed-in browser.
 - The app stores **only the browser's name**, not the cookies themselves. yt-dlp reads them from your browser each time.
 - On macOS, Safari needs **Full Disk Access** for the app, and Chrome may ask for **Keychain** access. These are
   system prompts you answer yourself.
-- If the cookie store cannot be read, the app retries once without cookies.
+- If the cookie store cannot be read, the app retries once without cookies and the progress card shows that retry.
+  If the engine looks stale, it can update once and retry; that retry is also visible. **[Unit-tested]**.
 - Use this only for your own account and content you are entitled to, as described in [Responsible use](#responsible-use).
   Leave it on **None** if you do not need it.
 
@@ -624,32 +655,25 @@ app queues them while it is running.
 - **If the saved destination stops being available** (you removed the favorite, deleted the folder, or the stored value
   is damaged), Settings and the Queue row show **"⚠ Folder unavailable: <name> — choose another"** instead of looking
   like the Main folder. A watched item with a destination that is no longer allowed **fails in the Queue with an error**
-  (*"That destination is not the main folder or one of your favorite folders…"* or *"Invalid destination for this
-  download…"*) and nothing is downloaded: it is **never** sent to the Main folder instead. Choose another folder in
+  (*"This app can't use that location. Choose the folder again."*) and nothing is downloaded: it is **never** sent
+  to the Main folder instead. Choose another folder in
   Settings (for new links) and on the failed row (for that item). Whether ↻ works after re-pointing the row was **not
   tested**.
 - **A damaged value on a Queue row** (a stored destination that is not text, such as `false`, `0`, a number or a
   bracketed object, or text that is not a folder choice) is shown the same way, **"⚠ Folder unavailable: <value> — choose
   another"**. It is not shown as Main and it does not hide or break the row or the rest of the table: the row stays
   visible with its folder list editable, and picking a real folder on it stores that folder. Running it fails with
-  *"Invalid destination for this download…"*; nothing is sent to the download engine and nothing lands in the Main
+  *"This app can't use that location. Choose the folder again."*; nothing is sent to the download engine and nothing lands in the Main
   folder. (An earlier build showed `false` and `0` as Main, and a number or object could stop the Queue from drawing.
   That is fixed. Whether the damaged value can arise in normal use was not established; it was reached only by
   editing stored data in tests.)
 - **Folders that are missing on disk.** A saved sub-folder, or a favorite that is still registered, whose folder was
   deleted is **recreated at the same place** when a watched item runs (this is how the Download tab behaves too). It
   does not go somewhere else.
-- **A favorite on a drive that is not plugged in.** The Queue and the watch folder do **not** check whether the drive is
-  connected (only the Download tab greys such a favorite out). The app tries to create the folder path and download
-  into it. **[Unit-tested with mocked paths]** two outcomes: (1) if the folder that should hold the drive is writable,
-  the app **silently creates the missing path on your own disk and downloads there**, with no warning; (2) if that
-  parent is not writable, creating it fails before anything is downloaded and the row shows a raw system error such as
-  *"EACCES: permission denied, mkdir '…'"* (the exact text Electron wraps around it was **not observed**). On the
-  review Mac, `/Volumes` is owned by root and its permissions do not let an ordinary user create entries (checked
-  by reading its permissions only; nothing was created, unplugged or opened), so case (2) is the expected result there,
-  **but a real unplugged drive was not tested**. Windows drive letters and Linux mount points were not tested. To be
-  safe, reconnect the drive before a queue or watched item runs. Making the app refuse unplugged drives needs a
-  change in the download code that was **not made** in this pass.
+- **A favorite on a drive that is not plugged in.** The app now refuses that destination before creating folders:
+  the item fails with *This app can't use that location. The drive isn't connected…* (`dest_unmounted`) and does **not** mkdir a look-alike path on your
+  disk. **[Unit-tested with mocked paths]**. A real unplugged USB on a Mac was **[Not tested]** in this pass
+  (the review Mac was offline). Reconnect the drive or pick another folder.
 - If you only ever saw the destination dropdown fall back to Main in an earlier version: that was the bug (the window
   and the main process used different field names, `folder` and `destid`). It is fixed; a destination you saved before
   the fix was never stored, so choose it once again.
@@ -693,15 +717,16 @@ The app does not ship yt-dlp. The first time you look up or download a link, it 
 - The app downloads the macOS yt-dlp program (`yt-dlp_macos`) from
   `https://github.com/yt-dlp/yt-dlp/releases/latest/download/` into a `bin/` folder inside its data folder.
   ffmpeg and ffprobe come from the `ffmpeg-static` and `ffprobe-static` npm packages and are copied there.
-- The transfer has safety limits: https only (including redirects), a size check (the received size must match
-  the server's Content-Length and be at least 1 MiB), 30 s idle and 10 min total time limits, and it saves to a
-  temporary file that is renamed only when complete.
-- **The app does not verify a checksum or signature for yt-dlp.** If a download is replaced or tampered with in a
-  way that keeps those size checks satisfied, the app would not notice.
+- The transfer has safety limits: https only (including redirects), a SHA-256 check against the GitHub release
+  `SHA2-256SUMS` file for that tagged asset, a size floor if the sums file is missing (same tag only), 30 s idle
+  and 10 min total time limits, and it saves to a temporary file that is renamed only when complete. A failed
+  update restores the previous binary from a `.bak` copy.
+- **A matching SHA-256 shows the bytes equal the published `SHA2-256SUMS` line. It is not a signature** and does
+  not prove the GitHub release itself is trustworthy.
 - The app checks about once a day for a newer yt-dlp. If a site-extraction error suggests the engine is out of date,
-  it updates once and retries once.
-- Only the macOS download path was seen working; the code's Linux support is x86_64 only, and replacing the engine
-  while it runs on Windows is untested.
+  it updates once and retries once; the progress card shows *Updating engine…*.
+- Linux also has an `aarch64` asset name in code. macOS packaging/runtime and a real engine download were **not
+  re-tested** in this Linux pass. Replacing the engine while it runs on Windows is untested.
 
 **Check it yourself (optional).** On the yt-dlp release page, open the **SHA2-256SUMS** file and find the
 `yt-dlp_macos` line. Then compute your copy's hash and compare:
@@ -710,8 +735,9 @@ The app does not ship yt-dlp. The first time you look up or download a link, it 
 shasum -a 256 "<app data folder>/bin/yt-dlp"
 ```
 
-During review this was done by hand and the hashes matched. The app itself never does this. A matching hash shows
-your copy equals the published file; it does not prove the published release is trustworthy.
+During an earlier review this was done by hand and the hashes matched. The app now does the same SHA-256 comparison
+against `SHA2-256SUMS` before it replaces the binary. A matching hash still does not prove the published release
+is trustworthy.
 
 **[Observed]** engine download and one real download. **[Not tested]**: the update path, failure paths, other platforms.
 
@@ -731,8 +757,9 @@ your copy equals the published file; it does not prove the published release is 
 | *Already in this folder* / *Already in folder (duplicate) — ↻ to download anyway* | Avoid duplicates found the same item. | Use ↻ to download anyway, or turn Avoid duplicates off. |
 | *Invalid folder name. Use a single name, without / or \, and no trailing dot or space.* / *Couldn't create the folder. Check the name and permissions.* | The folder name or permissions are a problem. | Use a plain name; check the main folder is writable. |
 | *Folder unavailable* | A favourite (such as a USB stick) is not connected. | Reconnect it or choose another folder. |
-| *Invalid destination for this download. Choose the folder again.* | The chosen folder no longer exists or is invalid. | Pick a destination chip again. |
-| *That file is outside the main folder and your favorite folders…* / *File not found…* / *Couldn't open that…* | History cannot open the file. | The file was moved, renamed or deleted, or is outside your folders. |
+| *This app can't use that location. The drive isn't connected. Reconnect it or choose another folder.* | The favorite path's parent is missing (drive unplugged). Nothing is created on disk. | Reconnect the drive or pick another folder. |
+| *This app can't use that location. Choose the folder again.* | The chosen folder is invalid or no longer allowed. | Pick a destination chip again. |
+| *This app can't use that location. It's not in the main folder or your favorites…* / *File not found…* / *Couldn't open that…* | History or Queue Show cannot open the file. | The file was moved, renamed or deleted, or its folder is not in this app's list. Add the folder as a favorite, or Locate the file. |
 | *No tracks found in this playlist.* | The list is empty or unreachable. | Check the link and sign-in needs. |
 | *Download cancelled* / *Cancelled — ↻ to retry* | You cancelled it. | Press ↻ on the row. |
 | An amber *⚠ Downloaded, but NOT normalized: … (reason)* | Normalize was on but could not be completed for that file. The file is saved at its original loudness. | See [If normalization fails](#if-normalization-fails). Download it again, or turn Normalize off for that item. |
@@ -749,12 +776,12 @@ the watch-folder destination (A, below). The other items are still present, incl
 
 | # | What happens | What to do |
 |---|---|---|
-| A | **Fixed** (kept in the list so the letters still match older notes): the watch-folder "Default destination folder" is now saved, shown again, and applied to newly queued watched links; an unavailable or damaged destination is shown as unavailable and fails visibly. See [Watch folder](#watch-folder-optional). **Remaining limits:** a favorite on an unplugged drive is not checked by the Queue (see the Watch folder section); only unit-tested and checked against a simulated backend; a destination saved before the fix was never stored, so choose it again; the list in an already open Settings window does not refresh until you reopen it. | Choose the destination once, then check where the first watched file lands. |
+| A | **Fixed** (kept in the list so the letters still match older notes): the watch-folder "Default destination folder" is now saved, shown again, and applied to newly queued watched links; an unavailable or damaged destination is shown as unavailable and fails visibly. Unplugged favorites now fail with `dest_unmounted` instead of mkdir on disk. **Remaining limits:** only unit-tested and checked against a simulated backend; a destination saved before the destId fix was never stored, so choose it again; the list in an already open Settings window does not refresh until you reopen it. | Choose the destination once, then check where the first watched file lands. |
 | B | **The `fpcalc` status line is always red** ("fpcalc not found — place the binary in bin/fpcalc"), because of a name mismatch between the window and the main process. The check also looks only in `bin/`, not on `PATH`. The repository's own test stub uses a third name, so tests do not catch it. | Do not trust the status line. Put `fpcalc` at `bin/fpcalc` and test with a known duplicate. |
 | C | **The Sensitivity dropdown shows blank** for Normal and Relaxed after opening Settings (stored values `0.9` and `0.8` do not match option values `0.90` and `0.80`). The effective default is still Normal (0.90). | Pick a value explicitly if you want to be sure. |
 | D | **The "Keep both / Open original / Delete new" fingerprint warning cannot be reached** from the current controls. Only the flag on the Queue row appears. | Use the flag as information; delete by hand if you want. |
-| E | **Auto-tag failures are silent.** (Normalize failures used to be silent too; they now produce a warning, see [If normalization fails](#if-normalization-fails).) | Spot-check tags in your DJ software. |
-| F | **Clear does not cancel a download already running.** | Use Cancel or Stop all on the Download tab first. |
+| E | **Partly fixed:** Auto-tag failures now show *tagging incomplete* on the row (the file is kept). WAV skip is still not treated as a failure. Spot-check tags in your DJ software. | Open the file in DJ software if tags matter. |
+| F | **Fixed:** Clear cancels the in-progress child, then empties the list. Finished files stay on disk. | None. |
 | G | **Renaming a folder on disk can break older History Play/Show** for files that were in it (History paths are not updated). Inferred from the code. | Use Rename sparingly, or open files from Finder. |
 | H | The header shows only the **last part** of the main folder path. | Open Settings to see the full path. |
 
@@ -773,7 +800,7 @@ in development runs. This is a release note for the maintainers, not something y
 | Latest smoke test: the same tone downloaded through the app window with the defaults (MP3 320 kbps, Normalize on at −14 LUFS) in a new isolated data folder; output measured −14.0 LUFS; no *not normalized* warning. One mono tone; ffmpeg 6.0 and the other engine files copied from an earlier review folder, not a verified fresh install; not listened to; not opened in Apple Music | **[Observed]**; see [Latest Mac smoke test](#latest-mac-smoke-test) |
 | Starting that download: Enter in the link box submitted it; two background (accessibility) presses of the Download button queued nothing, cause unconfirmed. A real mouse click on Download | Enter **[Observed]**; the button press **[Observed]** not to register; its cause and a real click **[Not tested]** |
 | Layout and accessibility checks of the window | Ran in real Electron against a **stub** backend |
-| Unit tests: **193 of 193 passing** in the latest run (130 existing + 19 for Normalize reporting and cancellation + 9 for the watch-folder destination + 31 for Queue display of damaged destinations + 4 for favorites on an unplugged drive). Run natively on the review Mac (macOS 27.0.1, Apple silicon, Node 26.11.1) and also on Linux (Node 22.23.4) | **[Unit-tested]**: stand-ins for Electron, yt-dlp, ffmpeg, network and binaries; no real yt-dlp or ffmpeg run. The Mac run's result was recorded as a short summary only, not a full log |
+| Unit tests: **231 of 231 passing** in this Linux pass (Node 22.23.4, sequential). Includes Phase 1 reliability/audio-safety tests (atomic persist, errors/retries, engine SHA-256, dest_unmounted, remembered format, copy-or-convert including unknown source bitrate, loudnorm I/TP gate, main-owned queue). An earlier Mac run of the pre-Phase-1 suite was 193/193. | **[Unit-tested]**: stand-ins for Electron, yt-dlp, network and binaries. One generated 1 s sine was measured with real ffmpeg 6.1.1 on Linux for loudnorm JSON parseability. No copyrighted media and no user cookies. Mac packaging/runtime **[Not tested]** in this pass |
 | Normalisation with real ffmpeg on test files (tones and synthetic signals) | **[Measured]** with ffmpeg 6.1.1 on Linux: −14 reached on all three files; −9 reached on two, not on a loud one (−12.9). See [Normalize](#if-normalization-fails) |
 | Normalisation through the app window with Normalize on on real music, with the ffmpeg of a verified fresh install of this candidate's package, or in a packaged build (one mono tone with a copied review ffmpeg is in the row above) | **[Not tested]** |
 | Normalize failure warning: texts, amber message, Queue note, cancel handling (single file, several files, cancel racing a successful ffmpeg exit) | **[Unit-tested]**; the window half **[Observed]** in a simulated window; failure, single-file cancel and a two-file cancel with real ffmpeg **[Measured]**; the cancel-vs-successful-exit race with real ffmpeg, a temporary-file deletion failure and a replacement failure on a real file system **[Not tested]** (the last two only simulated) |
@@ -783,9 +810,9 @@ in development runs. This is a release note for the maintainers, not something y
 | Audible playback of a downloaded file | **[Not tested]**: not established |
 | Playlists, video, other sites, queue with many real items | **[Not tested]** |
 | Watch-folder destination: saved, shown on reopen, applied to queued watched items, unavailable or damaged destination (including damaged values on Queue rows) | **[Unit-tested]**; dropdown and Queue rows **[Observed]** in a real browser engine against a simulated backend; a real watched download to the chosen folder **[Not tested]** |
-| Favorite on an unplugged drive | **[Unit-tested]** with mocked paths only (silent re-creation when the parent is writable; early permission error when it is not). `/Volumes` permissions on the review Mac read, not exercised. A real unplugged drive **[Not tested]** |
+| Favorite on an unplugged drive | **[Unit-tested]** with mocked paths: `dest_unmounted`, no mkdir on the fake parent. A real unplugged drive **[Not tested]** |
 | Watch folder with a real inbox (including iCloud), real `fpcalc`, browser cookies | **[Not tested]** |
-| Clean Mac, Intel, macOS 13, Windows, Linux, any packaged or signed build | **[Not tested]** |
+| Clean Mac, Intel, macOS 13, Windows, packaged or signed build | **[Not tested]**. This Phase 1 pass was Linux unit tests only; the user Mac was offline |
 
 ---
 
@@ -821,6 +848,7 @@ engine (download and version check); yt-dlp itself contacts the sites you ask fo
 - The progress card, the queue states, the History rows and the "fpcalc not found" line are staged states, not
   results of real downloads. Figures 8 and 9 were made the same way, after the Normalize warning was added: the
   simulated backend returns a "normalization failed" result and the real window code shows the warning.
+  Figure 10 is a labeled **fixture** of the Q1+Q2 Queue (Active vs Completed). Titles are `Fixture*` only.
 - Retaking them from a live Electron run is possible and would show the macOS window frame.
 
 [← Back to the README](../README.md)

@@ -37,7 +37,7 @@ the lockfile (`parse-cache-control` 1.0.1). 259 further packages in the lockfile
 
 | Component | Source in code | Notes |
 | --- | --- | --- |
-| `yt-dlp` standalone binary (`yt-dlp_macos`, `yt-dlp.exe`, `yt-dlp_linux`) | `https://github.com/yt-dlp/yt-dlp/releases/latest/download/...` (`app/main.js`) | The yt-dlp project's own licence is stated upstream as The Unlicense (not re-verified in this pass). The prebuilt standalone binaries bundle Python and other libraries under their own licences. *Not verified.* **No checksum or signature verification is performed by the app**; see the README. |
+| `yt-dlp` standalone binary (`yt-dlp_macos`, `yt-dlp.exe`, `yt-dlp_linux`, `yt-dlp_linux_aarch64`) | `https://github.com/yt-dlp/yt-dlp/releases/download/<tag>/...` (`app/main.js`) | The yt-dlp project's own licence is stated upstream as The Unlicense (not re-verified in this pass). The prebuilt standalone binaries bundle Python and other libraries under their own licences. *Not verified.* **SHA-256 is checked against that tagged release's `SHA2-256SUMS`.** That is not a signature. A failed update restores the previous binary from `.bak`. If the sums file is missing, a size-floor of the **same tag** is used; a checksum mismatch never installs. |
 | `fpcalc` (Chromaprint) | **Not downloaded.** Optional; the user supplies it | Looked up in the app's `bin/` folder, then on `PATH`. Licence *not verified*. |
 
 ---
@@ -55,5 +55,6 @@ the lockfile (`parse-cache-control` 1.0.1). 259 further packages in the lockfile
   confirmed the right to include it in this repository; no licence for others is granted or stated.
 - Obligations that attach to distributing a built desktop app containing GPL-licensed ffmpeg and the
   Electron/Chromium bundle.
-- Whether to add integrity/authenticity verification for the runtime yt-dlp download (checksum from the
-  release plus a pinned signature check), which would also be needed before any claim of verified updates.
+- Whether to add a **signature** check for the runtime yt-dlp download (checksum against `SHA2-256SUMS` is
+  now performed; that still does not prove the GitHub release is authentic). A pinned signature would be
+  needed before any stronger authenticity claim.

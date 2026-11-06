@@ -11,7 +11,7 @@ const path = require("path");
 const fs = require("fs");
 const { withHarness, runQueueLikeRenderer } = require("./h3-harness");
 
-const NOT_ALLOWED = /not the main folder or one of your favorite folders/;
+const NOT_ALLOWED = /can't use that location/;
 function symlink(target, linkPath) {
   try { fs.mkdirSync(path.dirname(linkPath), { recursive: true }); fs.symlinkSync(target, linkPath, "dir"); return true; }
   catch (_) { return false; }   // e.g. Windows without symlink privilege: symlink cases are skipped
@@ -183,7 +183,8 @@ test("download: unauthorized destinations are rejected before setup, creation or
       const r = await dl(h, { targetPath });
       assert.equal(r.ok, false, JSON.stringify(targetPath));
       assert.match(r.error, NOT_ALLOWED);
-      assert.deepEqual(Object.keys(r).sort(), ["error", "ok"]);
+      assert.equal(r.errorCode, "dest_bad");
+      assert.deepEqual(Object.keys(r).sort(), ["error", "errorCode", "ok"]);
     }
     // targetPath is never silently swapped for a folder: an unauthorized one fails even with a valid folder
     const r = await dl(h, { targetPath: L.outside, folder: "Techno" });
@@ -328,7 +329,7 @@ test("queued items: authorized destinations download, unauthorized/stale ones er
     const expectBad = ["1", "2", "3", ...(L.linkOut ? ["4"] : [])];
     for (const id of expectBad) {
       assert.equal(status[id], "error", id);
-      assert.match(after.find(i => i.id === id).error, /not the main folder|Invalid folder name|not directly inside/);
+      assert.match(after.find(i => i.id === id).error, /can't use that location|Invalid folder name|not directly inside/);
     }
     for (const id of ["5", "6", "7", "8"]) assert.equal(status[id], "done", id);
     assert.equal(after.length, stored.length);
@@ -337,8 +338,9 @@ test("queued items: authorized destinations download, unauthorized/stale ones er
     assert.ok(fs.existsSync(path.join(L.fav, "stub.mp4")));
     assert.ok(fs.existsSync(path.join(L.music, "Techno", "stub.mp4")));
     assert.ok(fs.existsSync(path.join(L.music, "stub.mp4")));
-    assert.equal(h.ytdlpCalls().length, 4, "only authorized items launched yt-dlp");
-    assert.ok(tmplOf(h.ytdlpCalls()[3]).startsWith(path.join(L.fav, "%(playlist_title)s")));
+    const dlCalls = h.ytdlpCalls().filter(c => c.args.includes("-o"));
+    assert.equal(dlCalls.length, 4, "only authorized items launched a yt-dlp download");
+    assert.ok(tmplOf(dlCalls[3]).startsWith(path.join(L.fav, "%(playlist_title)s")));
   });
 });
 

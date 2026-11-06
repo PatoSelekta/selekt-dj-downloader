@@ -41,7 +41,7 @@ const queue = (page) => page.evaluate(() => JSON.parse(JSON.stringify(__ctl.queu
 const stripFp = (q) => q.map(({ fpDup, ...rest }) => rest);
 async function rows(page) {                                  // what the Queue tab shows
   await page.evaluate(() => renderQueue());
-  return page.evaluate(() => [...document.querySelectorAll("#queueRows tr.q-row")].map(tr => ({
+  return page.evaluate(() => [...document.querySelectorAll("#queueActiveRows tr.q-row, #queueCompletedRows tr.q-row")].map(tr => ({
     id: tr.dataset.id,
     st: (tr.querySelector(".q-status span") || {}).className,
     fp: (tr.querySelector(".q-fpdup") || {}).textContent || null,

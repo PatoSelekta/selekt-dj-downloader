@@ -29,20 +29,32 @@ function cutBlock(src, startMarker, open = "{", close = "}") {
 const I18N = vm.runInNewContext("(" + cutBlock(RENDERER, "const I18N = ").replace(/^const I18N = /, "") + ")");
 const SRC = [
   RENDERER.split("\n").find(l => l.startsWith("function escapeHtml(")),
+  RENDERER.split("\n").find(l => l.startsWith("function lastSeg(")),
+  cutBlock(RENDERER, "function pathDir("),
+  cutBlock(RENDERER, "function pathBase("),
   cutBlock(RENDERER, "function buildFolderSelectOptions("),
   cutBlock(RENDERER, "function destOptionsHtml("),
   cutBlock(RENDERER, "function queueItemDest("),
   cutBlock(RENDERER, "function toDownloadOpts("),
+  cutBlock(RENDERER, "function isActiveQueueStatus("),
+  cutBlock(RENDERER, "function queueFormatLabel("),
+  cutBlock(RENDERER, "function destLabelForId("),
+  cutBlock(RENDERER, "function queueStatusLabel("),
+  cutBlock(RENDERER, "function queueFormatSelectHtml("),
+  cutBlock(RENDERER, "function canceledNote("),
+  cutBlock(RENDERER, "function locationRefusalText("),
+  cutBlock(RENDERER, "function h1Message("),
+  cutBlock(RENDERER, "async function handleQueueShow("),
   cutBlock(RENDERER, "async function renderQueue("),
 ].join("\n");
 
 // ---- a minimal fake page: just enough for renderQueue and its row handlers ----
 const unesc = (s) => s.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 const parseOptions = (html) => { const o = []; html.replace(/<option value="([^"]*)"([^>]*)>([^<]*)<\/option>/g, (_m, v, a, l) => { o.push({ value: unesc(v), label: unesc(l), selected: /\bselected\b/.test(a), disabled: /\bdisabled\b/.test(a) }); return ""; }); return o; };
-function makeDom() {
-  const els = {};
-  const rows = [], cache = new Map();
-  const tbody = {
+function makeBody(cache) {
+  const rows = [];
+  return {
+    rows,
     set innerHTML(v) { rows.length = 0; cache.clear(); this.emptyHtml = v; },
     get innerHTML() { return this.emptyHtml || ""; },
     appendChild(tr) { rows.push(tr); },
@@ -51,14 +63,14 @@ function makeDom() {
       for (const tr of rows) {
         const h = tr.innerHTML;
         if (sel === ".q-retry" || sel === ".q-remove") {
-          const cls = sel.slice(1); const re = new RegExp(`<button class="sec ${cls}" data-id="([^"]*)"`, "g");
+          const cls = sel.slice(1); const re = new RegExp(`<button[^>]*class="[^"]*\\b${cls}\\b[^"]*"[^>]*data-id="([^"]*)"`, "g");
           h.replace(re, (_m, id) => { const k = cls + "|" + id; if (!cache.has(k)) cache.set(k, { dataset: { id }, onclick: null }); out.push(cache.get(k)); return ""; });
         } else if (sel === "select[data-row-id]") {
-          h.replace(/<select class="q-sel" data-row-id="([^"]*)" data-field="(\w+)" ?(disabled)?>([\s\S]*?)<\/select>/g, (_m, id, field, dis, inner) => {
+          h.replace(/<select class="q-sel" data-row-id="([^"]*)" data-field="(\w+)"([^>]*)>([\s\S]*?)<\/select>/g, (_m, id, field, attrs, inner) => {
             const k = "sel|" + id + "|" + field;
             if (!cache.has(k)) {
               let sel_ = parseOptions(inner).findIndex(x => x.selected); if (sel_ < 0) sel_ = 0;
-              const e = { dataset: { rowId: id, field }, disabled: !!dis, options: parseOptions(inner), listeners: {}, addEventListener(t, f) { this.listeners[t] = f; },
+              const e = { dataset: { rowId: id, field }, disabled: /\bdisabled\b/.test(attrs), options: parseOptions(inner), listeners: {}, addEventListener(t, f) { this.listeners[t] = f; },
                 get value() { return sel_ >= 0 ? this.options[sel_].value : ""; },
                 set value(v) { sel_ = this.options.findIndex(x => x.value === v); },
                 get shown() { return sel_ >= 0 ? this.options[sel_] : null; } };
@@ -72,10 +84,28 @@ function makeDom() {
       return out;
     },
   };
+}
+function makeDom() {
+  const els = {};
+  const cache = new Map();
+  const active = makeBody(cache);
+  const completed = makeBody(cache);
   const mk = (id) => ({ id, style: {}, textContent: "", innerHTML: "", disabled: false, classList: { add() {}, remove() {} } });
-  const $ = (id) => id === "queueRows" ? tbody : (els[id] = els[id] || mk(id));
-  const document = { createElement: () => ({ className: "", dataset: {}, innerHTML: "" }) };
-  return { $, document, rows, select: (id, field = "destId") => { tbody.querySelectorAll("select[data-row-id]"); return cache.get(`sel|${id}|${field}`); } };
+  const $ = (id) => {
+    if (id === "queueRows" || id === "queueActiveRows") return active;
+    if (id === "queueCompletedRows") return completed;
+    return (els[id] = els[id] || mk(id));
+  };
+  const document = { createElement: () => ({ className: "", dataset: {}, innerHTML: "", setAttribute() {} }) };
+  return {
+    $, document,
+    get rows() { return [...active.rows, ...completed.rows]; },
+    select: (id, field = "destId") => {
+      active.querySelectorAll("select[data-row-id]");
+      completed.querySelectorAll("select[data-row-id]");
+      return cache.get(`sel|${id}|${field}`);
+    },
+  };
 }
 const clone = (x) => JSON.parse(JSON.stringify(x));
 async function startPage({ queue, folders = ["Techno"], favs = [{ name: "USB", path: "/Volumes/USB/Tracks" }], lang = "en" }) {
@@ -102,7 +132,7 @@ const BAD = [["a malformed string", "garbage"], ["p: with no path", "p:"], ["f: 
 for (const [name, bad] of BAD) {
   for (const status of ["pending", "error", "skipped"]) {
     test(`Queue row with destId = ${name} (${status}): shown as unavailable, never Main; row stays visible and can be re-pointed`, T, async () => {
-      const page = await startPage({ queue: [item("a", ""), item("b", bad, status, status === "error" ? { error: "Invalid destination for this download. Choose the folder again." } : {}), item("c", "f:Techno")] });
+      const page = await startPage({ queue: [item("a", ""), item("b", bad, status, status === "error" ? { error: I18N.en.dest_bad, errorCode: "dest_bad" } : {}), item("c", "f:Techno")] });
       assert.equal(page.dom.rows.length, 3, "all rows rendered: one damaged destination does not break the table");
       assert.match(page.dom.rows[1].innerHTML, /Song b/, "the damaged row is visible with its title");
       const sel = page.dom.select("b");
@@ -135,10 +165,12 @@ for (const [name, bad] of BAD) {
   }
 }
 
-test("a locked row (done / running) with a damaged destination still renders, as unavailable and disabled", T, async () => {
+test("a running row with a damaged destination is read-only text; a done row has no dest select", T, async () => {
   const page = await startPage({ queue: [item("d", false, "done"), item("r", 0, "running")] });
   assert.equal(page.dom.rows.length, 2);
-  for (const id of ["d", "r"]) { const s = page.dom.select(id); assert.equal(s.disabled, true); assert.match(s.shown.label, /^⚠ Folder unavailable/); }
+  assert.equal(page.dom.select("d"), undefined, "completed rows do not keep a destination select");
+  assert.equal(page.dom.select("r"), undefined, "running rows are read-only instructions, not a disabled select");
+  assert.match(page.dom.rows.map((r) => r.innerHTML).join("\n"), /Folder unavailable|false|0/);
 });
 
 test("the valid destination contracts are unchanged: absent / null / '' = Main, f: and p: shown as chosen, a removed favorite or sub-folder is unavailable", T, async () => {
@@ -158,12 +190,12 @@ test("the valid destination contracts are unchanged: absent / null / '' = Main, 
   assert.equal(es.dom.select("x").shown.label, "⚠ Carpeta no disponible: false — elige otra");
 });
 
-test("running a queued item with a damaged destination: nothing is sent to main and nothing is downloaded to Main (real toDownloadOpts + real main.js)", T, async () => {
+test("running a queued item with a damaged destination: nothing is sent to download and nothing is downloaded to Main (real toDownloadOpts + real main.js)", T, async () => {
   const MAIN = fs.readFileSync(path.join(APP, "main.js"), "utf8");
   const RQ = cutBlock(RENDERER, "async function runQueue(");
-  assert.match(RQ, /if \(opts\.destInvalid\) \{\s*r = \{ ok: false, error: t\("dest_bad"\) \};/, "runQueue turns an invalid destination into a per-item error before calling main");
-  assert.ok(RQ.indexOf("if (opts.destInvalid)") < RQ.indexOf("api.download(opts)"));
-  void MAIN;
+  assert.match(RQ, /api\.queueStart\(/, "runQueue dispatches the main-owned runner");
+  assert.doesNotMatch(RQ, /api\.download\(/, "the queue path does not call api.download");
+  assert.match(MAIN, /if \(dest\.destInvalid\)/, "main runner fails malformed destId before download");
   for (const [name, bad] of BAD) {
     await withHarness({}, async (h) => {
       const page = await startPage({ queue: [item("a", bad)] });
@@ -183,29 +215,34 @@ test("running a queued item with a damaged destination: nothing is sent to main 
   }
 });
 
-// The REAL runQueue loop (cut from renderer.js) driving the REAL main.js download handler through the harness:
-// a damaged destination must end as an error row, must never call download, and must leave Main empty.
+// Production queue-start driving the REAL main.js download handler:
+// a damaged destination must end as an error row, must never call yt-dlp, and must leave Main empty.
 // A control row with a valid destination proves the same wiring does download when the destination is valid.
-test("real runQueue + real main.js: damaged destinations become error rows, api.download is never called, nothing lands in Main; a valid row downloads", T, async () => {
+test("production queue-start + real main.js: damaged destinations become error rows, yt-dlp is never called for them, nothing lands in Main; a valid row downloads", T, async () => {
   for (const [name, bad] of BAD) {
     await withHarness({}, async (h) => {
       const page = await startPage({ queue: [item("bad", bad), item("ok", "f:Techno")] });
       h.mkdir("Music/Techno");
-      const calls = [];
-      page.ctx.api.download = async (opts) => { calls.push(clone(opts)); return h.invoke("download", opts); };
-      const noop = () => {};
-      Object.assign(page.ctx, { stopAllRequested: false, plProgress: null, queueActiveId: null, normWarnText: () => "", canceledNote: () => "", setCancelBusy: noop, updateActiveCount: noop, finishPlaylistProgress: noop, hideBar: noop, lastSeg: (x) => String(x || "").split(/[\\/]/).pop(), setTimeout });
-      page.ctx.api.queueUpdateItem = async (patch) => { const it = page.store.queue.find(i => i.id === patch.id); if (it) Object.assign(it, clone(patch)); return { ok: true }; };
-      vm.runInContext(cutBlock(RENDERER, "async function runQueue("), page.ctx);
-      await page.ctx.runQueue();
-      const bad_ = page.store.queue.find(i => i.id === "bad"), ok_ = page.store.queue.find(i => i.id === "ok");
+      await h.invoke("queue-set", [item("bad", bad), item("ok", "f:Techno")]);
+      await h.invoke("queue-start");
+      const end = Date.now() + 8000;
+      while (Date.now() < end) {
+        const st = await h.invoke("queue-status");
+        if (!st.running) break;
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      const q = await h.invoke("queue-get");
+      const bad_ = q.find(i => i.id === "bad"), ok_ = q.find(i => i.id === "ok");
       assert.equal(bad_.status, "error", name);
       assert.equal(bad_.error, I18N.en.dest_bad, name + ": the user-facing error is the 'invalid destination' one");
-      assert.ok(!calls.some(c => c.url.endsWith("/bad")), name + ": api.download was not called for the damaged row");
+      assert.equal(bad_.errorCode, "dest_bad", name);
       assert.equal(ok_.status, "done", name + ": the valid neighbour still ran");
-      assert.deepEqual(calls.map(c => c.folder), ["Techno"], name);
+      const dlCalls = h.ytdlpCalls().filter((c) => c.args.includes("-o"));
+      assert.equal(dlCalls.length, 1, name);
+      assert.equal(dlCalls[0].args[dlCalls[0].args.indexOf("-o") + 1].includes("Techno"), true, name);
       assert.deepEqual(fs.readdirSync(h.music).filter(n => n !== ".DS_Store" && n !== "Techno"), [], name + ": nothing was written to the main folder");
       // the failed row is still on screen, still editable, and re-pointing + retry makes it run
+      page.store.queue = q.map(clone);
       await page.ctx.renderQueue();
       assert.equal(page.dom.rows.length, 2);
       const sel = page.dom.select("bad");

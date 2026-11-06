@@ -14,13 +14,16 @@ const fs = require("fs");
 const path = require("path");
 const { EventEmitter } = require("events");
 const { PassThrough } = require("stream");
+const { createHash } = require("crypto");
 const { mock } = require("node:test");
 const { makeHarness } = require("./h3-harness");
 
 const WIN = process.platform === "win32";
 const EXE = "yt-dlp" + (WIN ? ".exe" : "");
-const ASSET = WIN ? "yt-dlp.exe" : process.platform === "darwin" ? "yt-dlp_macos" : "yt-dlp_linux";
-const URL_LATEST = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/" + ASSET;
+const ASSET = WIN ? "yt-dlp.exe" : process.platform === "darwin" ? "yt-dlp_macos" : (process.arch === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux");
+const TAG = "2099.01.01";
+const URL_SUMS = "https://github.com/yt-dlp/yt-dlp/releases/download/" + TAG + "/SHA2-256SUMS";
+const URL_ASSET = "https://github.com/yt-dlp/yt-dlp/releases/download/" + TAG + "/" + ASSET;
 const T = { timeout: 20000 };
 
 // Synthetic "binary": 1.3 MB (above the 1 MiB plausibility floor), no zero bytes, so a zero-filled
@@ -28,6 +31,7 @@ const T = { timeout: 20000 };
 const BODY = Buffer.alloc(1300000);
 for (let i = 0; i < BODY.length; i++) BODY[i] = (i % 250) + 1;
 const OLD = "OLD-BINARY-STAYS-INTACT";
+const SUMS = Buffer.from(createHash("sha256").update(BODY).digest("hex") + "  " + ASSET + "\n");
 
 function makeNet() {
   const net = { calls: [], handler: null, latest: null, requests: 0 };
@@ -59,11 +63,18 @@ function makeNet() {
   };
   return net;
 }
+function isSums(c) { return String(c.url).includes("SHA2-256SUMS"); }
+function binCalls(net) { return net.calls.filter((c) => !isSums(c)); }
 // A complete, correct 200 response.
 function serve(call, body = BODY, headers = {}) {
   const res = call.respond(200, { "content-length": String(body.length), ...headers });
   for (let i = 0; i < body.length; i += 65536) res.write(body.subarray(i, i + 65536));
   res.complete = true; res.end();
+}
+function serveSums(c) { serve(c, SUMS); }
+function serveEngine(c) { if (isSums(c)) serveSums(c); else serve(c); }
+function onBinary(fn) {
+  return (c) => { if (isSums(c)) serveSums(c); else fn(c); };
 }
 // A response that sends the first `n` bytes and then waits: finish() sends the rest, drop(mode) kills it.
 function partial(call, n = 400000, body = BODY) {
@@ -82,6 +93,7 @@ const guard = (p, ms = 5000) => Promise.race([p, new Promise((_, rej) => setTime
 const until = async (fn, n = 2000) => { for (let i = 0; i < n; i++) { if (fn()) return true; await new Promise((r) => setImmediate(r)); } return !!fn(); };
 // A harness where yt-dlp is missing (first install). Seed first, then remove it.
 function firstInstall(net, extra = {}) {
+  if (net.latest == null) net.latest = TAG;
   const h = makeHarness({ https: net.https, ...extra });
   fs.rmSync(ytdlp(h), { force: true });
   fs.rmSync(path.join(h.binDir, ".ytdlp_variant"), { force: true });
@@ -100,13 +112,14 @@ function withOldBinary(net, extra = {}) {
 
 // ---------------------------------------------------------------------------------------------
 test("first install: complete body is installed executable, marker written, no temp left, error-free", T, async () => {
-  const net = makeNet(); net.handler = (c) => serve(c);
+  const net = makeNet(); net.handler = serveEngine;
   const h = firstInstall(net);
   try {
     const r = await guard(h.invoke("ensure-setup"));
     assert.deepEqual(r, { ok: true });
-    assert.equal(net.calls.length, 1);
-    assert.equal(net.calls[0].url, URL_LATEST);
+    assert.equal(net.calls.length, 2);
+    assert.equal(net.calls[0].url, URL_SUMS);
+    assert.equal(net.calls[1].url, URL_ASSET);
     assert.ok(fs.readFileSync(ytdlp(h)).equals(BODY), "installed bytes are exactly the body");
     if (!WIN) assert.equal(fs.statSync(ytdlp(h)).mode & 0o777, 0o755);
     assert.equal(fs.readFileSync(path.join(h.binDir, ".ytdlp_variant"), "utf8"), "standalone-1");
@@ -118,7 +131,8 @@ test("redirects: absolute and relative https redirects are followed; non-https a
   {
     const net = makeNet();
     net.handler = (c) => {
-      const n = net.calls.indexOf(c);
+      if (isSums(c)) return serveSums(c);
+      const n = binCalls(net).indexOf(c);
       if (n === 0) c.respond(302, { location: "/yt-dlp/yt-dlp/releases/download/9/x" }).end();
       else if (n === 1) c.respond(302, { location: "https://objects.example.invalid/blob?sig=1" }).end();
       else serve(c);
@@ -126,7 +140,7 @@ test("redirects: absolute and relative https redirects are followed; non-https a
     const h = firstInstall(net);
     try {
       assert.deepEqual(await guard(h.invoke("ensure-setup")), { ok: true });
-      assert.deepEqual(net.calls.map((c) => c.url), [URL_LATEST, "https://github.com/yt-dlp/yt-dlp/releases/download/9/x", "https://objects.example.invalid/blob?sig=1"]);
+      assert.deepEqual(net.calls.map((c) => c.url), [URL_SUMS, URL_ASSET, "https://github.com/yt-dlp/yt-dlp/releases/download/9/x", "https://objects.example.invalid/blob?sig=1"]);
       assert.ok(fs.readFileSync(ytdlp(h)).equals(BODY));
     } finally { h.close(); }
   }
@@ -154,9 +168,9 @@ test("redirects: absolute and relative https redirects are followed; non-https a
 test("bad responses are rejected and nothing is installed: HTTP error, short body, too-small body, 200 error page", T, async () => {
   const cases = [
     ["HTTP 404", (c) => c.respond(404, {}).end(), /^HTTP 404$/],
-    ["short body vs Content-Length", (c) => { const res = c.respond(200, { "content-length": String(BODY.length) }); res.write(BODY.subarray(0, 500000)); res.complete = true; res.end(); }, /Incomplete download \(500000 of 1300000 bytes\)/],
-    ["HTML error page, 200", (c) => serve(c, Buffer.from("<html>rate limited</html>")), /Download too small/],
-    ["no Content-Length, tiny body", (c) => { const res = c.respond(200, {}); res.write("x"); res.complete = true; res.end(); }, /Download too small/],
+    ["short body vs Content-Length", onBinary((c) => { const res = c.respond(200, { "content-length": String(BODY.length) }); res.write(BODY.subarray(0, 500000)); res.complete = true; res.end(); }), /Incomplete download \(500000 of 1300000 bytes\)/],
+    ["HTML error page, 200", onBinary((c) => serve(c, Buffer.from("<html>rate limited</html>"))), /Download too small/],
+    ["no Content-Length, tiny body", onBinary((c) => { const res = c.respond(200, {}); res.write("x"); res.complete = true; res.end(); }), /Download too small/],
   ];
   for (const [name, handler, rx] of cases) {
     const net = makeNet(); net.handler = handler;
@@ -173,51 +187,57 @@ test("bad responses are rejected and nothing is installed: HTTP error, short bod
 
 test("connection dropped mid-body: the install settles with an error, the temp is removed, and a retry works", T, async () => {
   for (const mode of ["destroy", "aborted", "error"]) {
-    const net = makeNet(); net.handler = (c) => (net.calls.length === 1 ? partial(c) : serve(c));
+    const net = makeNet();
+    net.handler = onBinary((c) => (binCalls(net).length === 1 ? partial(c) : serve(c)));
     const h = firstInstall(net);
     try {
       const p = h.invoke("ensure-setup");
       assert.ok(await h.waitFor(() => parts(h).length === 1 && fs.statSync(path.join(h.binDir, parts(h)[0])).size > 0), mode + ": partial data on disk");
       assert.equal(fs.existsSync(ytdlp(h)), false, mode + ": destination untouched while in flight");
-      net.calls[0].drop(mode);
+      binCalls(net)[0].drop(mode);
       const r = await guard(p);
       assert.equal(r.ok, false, mode); assert.match(r.error, /Connection lost|ECONNRESET/, mode);
       assert.deepEqual(parts(h), [], mode + ": temp removed");
       assert.equal(fs.existsSync(ytdlp(h)), false, mode);
       // the failed attempt must not leave the engine wedged: the next call starts a fresh transfer
       assert.deepEqual(await guard(h.invoke("ensure-setup")), { ok: true }, mode + ": retry");
-      assert.equal(net.calls.length, 2, mode);
+      assert.equal(net.calls.length, 4, mode);
       assert.ok(fs.readFileSync(ytdlp(h)).equals(BODY), mode);
     } finally { h.close(); }
   }
 });
 
 test("stalled socket: the idle timeout fails the attempt, destroys the request, removes the temp", T, async () => {
-  const net = makeNet(); net.handler = (c) => partial(c);
+  const net = makeNet(); net.handler = onBinary((c) => partial(c));
   const h = firstInstall(net);
   try {
     const p = h.invoke("ensure-setup");
     assert.ok(await h.waitFor(() => parts(h).length === 1));
-    assert.equal(net.calls[0].req.stallMs, 30000, "30 s socket idle limit is armed");
-    net.calls[0].req.fireTimeout();
+    const bin = binCalls(net)[0];
+    assert.equal(bin.req.stallMs, 30000, "30 s socket idle limit is armed");
+    bin.req.fireTimeout();
     const r = await guard(p);
     assert.deepEqual(r, { ok: false, error: "Download stalled" });
-    assert.equal(net.calls[0].req.destroyed, true);
+    assert.equal(bin.req.destroyed, true);
     assert.deepEqual(parts(h), []); assert.equal(fs.existsSync(ytdlp(h)), false);
   } finally { h.close(); }
 });
 
 test("a stale socket-timeout from an earlier redirect hop cannot fail the current transfer", T, async () => {
   const net = makeNet();
-  net.handler = (c) => { if (net.calls.indexOf(c) === 0) c.respond(302, { location: "https://objects.example.invalid/b" }).end(); else partial(c); };
+  net.handler = (c) => {
+    if (isSums(c)) return serveSums(c);
+    if (binCalls(net).indexOf(c) === 0) c.respond(302, { location: "https://objects.example.invalid/b" }).end();
+    else partial(c);
+  };
   const h = firstInstall(net);
   try {
     const p = h.invoke("ensure-setup");
-    assert.ok(await h.waitFor(() => net.calls.length === 2 && parts(h).length === 1));
-    net.calls[0].req.fireTimeout();                       // the first hop's socket idles out AFTER the redirect
+    assert.ok(await h.waitFor(() => net.calls.length === 3 && parts(h).length === 1));
+    binCalls(net)[0].req.fireTimeout();                       // the first hop's socket idles out AFTER the redirect
     await new Promise((r) => setTimeout(r, 30));
-    assert.equal(net.calls[1].req.destroyed, false, "current request untouched");
-    net.calls[1].finish();
+    assert.equal(binCalls(net)[1].req.destroyed, false, "current request untouched");
+    binCalls(net)[1].finish();
     assert.deepEqual(await guard(p), { ok: true });
     assert.ok(fs.readFileSync(ytdlp(h)).equals(BODY));
   } finally { h.close(); }
@@ -242,7 +262,7 @@ test("overall deadline: a transfer that never answers is abandoned after 10 minu
 });
 
 test("concurrent setup requests (+ launch) share ONE transfer; the binary is never partly written in place", T, async () => {
-  const net = makeNet(); net.handler = (c) => partial(c, 300000);
+  const net = makeNet(); net.latest = TAG; net.handler = onBinary((c) => partial(c, 300000));
   // withWindow: the app's own launch-time ensureBinaries() starts the download synchronously.
   const h = makeHarness({ https: net.https, withWindow: true, seedBinaries: false });
   try {
@@ -251,52 +271,53 @@ test("concurrent setup requests (+ launch) share ONE transfer; the binary is nev
     assert.ok(await h.waitFor(() => parts(h).length === 1 && fs.statSync(path.join(h.binDir, parts(h)[0])).size > 0));
     const late = h.invoke("ensure-setup");                // a third caller arrives mid-transfer
     await new Promise((r) => setTimeout(r, 30));
-    assert.equal(net.calls.length, 1, "one HTTP request for launch + 3 callers");
+    assert.equal(binCalls(net).length, 1, "one binary HTTP request for launch + 3 callers");
     assert.equal(parts(h).length, 1, "one temp file");
     assert.equal(fs.existsSync(ytdlp(h)), false, "nothing is installed until the transfer is complete");
-    net.calls[0].finish();
+    binCalls(net)[0].finish();
     const [ra, rb, rl] = await guard(Promise.all([a, b, late]));
     assert.deepEqual(ra, { ok: true }); assert.deepEqual(rl, { ok: true }); assert.equal(rb.ok, true);
     const got = fs.readFileSync(ytdlp(h));
     assert.ok(got.equals(BODY), "complete, no zero-filled holes");
     assert.equal(got.includes(0), false);
     assert.deepEqual(parts(h), []);
-    assert.equal(net.calls.length, 1);
+    assert.equal(binCalls(net).length, 1);
   } finally { h.close(); }
 });
 
 test("concurrent callers all see the same failure, and the next request starts clean", T, async () => {
-  const net = makeNet(); net.handler = (c) => (net.calls.length === 1 ? partial(c) : serve(c));
+  const net = makeNet();
+  net.handler = onBinary((c) => (binCalls(net).length === 1 ? partial(c) : serve(c)));
   const h = firstInstall(net);
   try {
     const a = h.invoke("ensure-setup"), b = h.invoke("ensure-setup");
     assert.ok(await h.waitFor(() => parts(h).length === 1));
-    net.calls[0].drop("destroy");
+    binCalls(net)[0].drop("destroy");
     const [ra, rb] = await guard(Promise.all([a, b]));
     assert.equal(ra.ok, false); assert.deepEqual(ra, rb);
-    assert.equal(net.calls.length, 1);
+    assert.equal(binCalls(net).length, 1);
     assert.deepEqual(await guard(h.invoke("ensure-setup")), { ok: true });
   } finally { h.close(); }
 });
 
 test("a failed refresh keeps the previous binary byte-for-byte (drop, bad size, HTTP error); a good one replaces it atomically", T, async () => {
   const bad = [
-    ["drop", (c) => { partial(c); setTimeout(() => c.drop("destroy"), 20); }],
-    ["too small", (c) => serve(c, Buffer.from("<html>nope</html>"))],
+    ["drop", onBinary((c) => { partial(c); setTimeout(() => c.drop("destroy"), 20); })],
+    ["too small", onBinary((c) => serve(c, Buffer.from("<html>nope</html>")))],
     ["HTTP 500", (c) => c.respond(500, {}).end()],
   ];
   for (const [name, handler] of bad) {
-    const net = makeNet(); net.latest = "2099.01.01"; net.handler = handler;
+    const net = makeNet(); net.latest = TAG; net.handler = handler;
     const h = withOldBinary(net, { withWindow: true });        // launch -> daily refresh path (not awaited by main)
     h.setScript((cmd, args) => (args.includes("--version") ? { code: 0, stdout: "2020.01.01\n" } : { code: 0 }));
     try {
       assert.ok(await h.waitFor(() => h.sent.some((s) => s[1] === "Updating the download engine…"), 3000), name + ": refresh started");
-      assert.ok(await h.waitFor(() => net.calls.length === 1 && h.sent.filter((s) => s[1] === "Ready.").length >= 2, 3000), name + ": refresh settled");
+      assert.ok(await h.waitFor(() => net.calls.length >= 1 && h.sent.filter((s) => s[1] === "Ready.").length >= 2, 3000), name + ": refresh settled");
       assert.equal(fs.readFileSync(ytdlp(h), "utf8"), OLD, name + ": old binary untouched");
       assert.deepEqual(parts(h), [], name + ": temp removed");
     } finally { h.close(); }
   }
-  const net = makeNet(); net.latest = "2099.01.01"; net.handler = (c) => serve(c);
+  const net = makeNet(); net.latest = TAG; net.handler = serveEngine;
   const h = withOldBinary(net, { withWindow: true });
   h.setScript((cmd, args) => (args.includes("--version") ? { code: 0, stdout: "2020.01.01\n" } : { code: 0 }));
   try {
@@ -307,7 +328,7 @@ test("a failed refresh keeps the previous binary byte-for-byte (drop, bad size, 
 });
 
 test("stale-engine retry: forced update joins an in-flight refresh (one transfer) and the download is retried", T, async () => {
-  const net = makeNet(); net.latest = "2099.01.01"; net.handler = (c) => partial(c, 300000);
+  const net = makeNet(); net.latest = TAG; net.handler = onBinary((c) => partial(c, 300000));
   const h = withOldBinary(net, { withWindow: true });
   h.mkdir("Music");
   let downloads = 0;
@@ -322,12 +343,12 @@ test("stale-engine retry: forced update joins an in-flight refresh (one transfer
     return { code: 0 };
   });
   try {
-    assert.ok(await h.waitFor(() => net.calls.length === 1 && parts(h).length === 1), "launch refresh is mid-transfer");
+    assert.ok(await h.waitFor(() => binCalls(net).length === 1 && parts(h).length === 1), "launch refresh is mid-transfer");
     const p = h.invoke("download", { url: "https://example.com/v", type: "video", quality: "best", autoTag: false });
     assert.ok(await h.waitFor(() => downloads === 1), "first attempt failed with a stale-engine error");
     await new Promise((r) => setTimeout(r, 30));
-    assert.equal(net.calls.length, 1, "forced update did not start a second transfer");
-    net.calls[0].finish();
+    assert.equal(binCalls(net).length, 1, "forced update did not start a second transfer");
+    binCalls(net)[0].finish();
     const r = await guard(p);
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(downloads, 2, "download retried once with the new engine");
@@ -337,7 +358,7 @@ test("stale-engine retry: forced update joins an in-flight refresh (one transfer
 });
 
 test("stale-engine retry whose update FAILS: the user still gets the original yt-dlp error, old binary intact", T, async () => {
-  const net = makeNet(); net.latest = "2099.01.01";
+  const net = makeNet(); net.latest = TAG;
   net.handler = (c) => c.respond(503, {}).end();
   const h = makeHarness({ https: net.https });             // fresh .ytdlp_checked: no launch refresh
   fs.writeFileSync(ytdlp(h), OLD);
@@ -353,7 +374,7 @@ test("stale-engine retry whose update FAILS: the user still gets the original yt
 });
 
 test("first-install failure keeps its user-facing behavior: setup-status text, ensure-setup error, download rejects", T, async () => {
-  const net = makeNet(); net.handler = (c) => c.respond(404, {}).end();
+  const net = makeNet(); net.latest = TAG; net.handler = (c) => c.respond(404, {}).end();
   const h = makeHarness({ https: net.https, withWindow: true, seedBinaries: false });
   try {
     assert.deepEqual(await guard(h.invoke("ensure-setup")), { ok: false, error: "HTTP 404" });
@@ -367,7 +388,7 @@ test("first-install failure keeps its user-facing behavior: setup-status text, e
 });
 
 test("leftover temp files: stale ones (> 1 h, incl. the legacy name) are swept, a recent one is left alone", T, async () => {
-  const net = makeNet(); net.handler = (c) => serve(c);
+  const net = makeNet(); net.handler = serveEngine;
   const h = firstInstall(net);
   try {
     const old = [EXE + ".deadbeef.part", EXE + ".part"].map((n) => path.join(h.binDir, n));
@@ -391,5 +412,5 @@ test("source guard: the install path has no fixed shared temp name and no unsett
   assert.equal(/dest \+ "\.part"/.test(block), false, "no fixed `dest + .part` temp name");
   assert.match(block, /randomUUID\(\)/);
   assert.match(block, /ytdlpInstall/);
-  assert.equal((src.match(/downloadTo\(/g) || []).length, 2, "downloadTo has exactly one definition and one caller (downloadYtdlp)");
+  assert.equal((src.match(/downloadTo\(/g) || []).length, 3, "downloadTo has exactly one definition and two callers (sums + binary)");
 });

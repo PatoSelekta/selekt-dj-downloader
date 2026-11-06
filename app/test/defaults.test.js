@@ -165,10 +165,11 @@ test("explicitly saved OFF (Avoid duplicates, Normalize, Auto-tag): the same tra
       loudnormI: undefined, reencode: undefined, tagged: false });
   });
 });
-test("explicitly saved OFF, with the options the UI sends (autoTag:false): no duplicate probe at all", T, async () => {
+test("explicitly saved OFF, with the options the UI sends (autoTag:false): encode probe runs; no normalize or tag", T, async () => {
   await withConfig((u) => ({ ...musicOnly(u), prevent_duplicates: false, loudnorm: false, auto_tag: false }), async (h) => {
     const o = await download(h, { audioFormat: "mp3", bitrate: "320", autoTag: false, loudnorm: false, lufs: -14 });
-    assert.equal(o.probed, false); assert.equal(o.loudnormI, undefined); assert.equal(o.tagged, false);
+    assert.equal(o.probed, true, "audio downloads probe once so copy-vs-convert can see the source");
+    assert.equal(o.loudnormI, undefined); assert.equal(o.tagged, false);
   });
 });
 test("explicitly saved -9 LUFS is used by a new download", T, async () => {
@@ -213,7 +214,8 @@ function rendererWorld(ui, globals = {}) {
   vm.runInContext([
     m[0],
     "function queueItemDest(item) { return SelektDest.queueItemDest(item); }",
-    cutFunction(RENDERER, "currentDestId"), cutFunction(RENDERER, "toDownloadOpts"), cutFunction(RENDERER, "buildQueueItemFromSelection"),
+    cutFunction(RENDERER, "currentDestId"), cutFunction(RENDERER, "toDownloadOpts"),
+    cutFunction(RENDERER, "buildQueueItemFromSelection"), cutFunction(RENDERER, "buildQueueItemsFromPaste"),
   ].join("\n"), ctx);
   return { ctx, initial, defaultBitrate: m[1] };
 }
@@ -256,15 +258,22 @@ test("Download tab -> queue item (default controls): audio:mp3, 320, auto-tag/no
   assert.deepEqual({ type: o.type, audioFormat: o.audioFormat, bitrate: o.bitrate, autoTag: o.autoTag, loudnorm: o.loudnorm, lufs: o.lufs },
     { type: "audio", audioFormat: "mp3", bitrate: "320", autoTag: true, loudnorm: true, lufs: -14 });
 });
-test("Queue tab 'Add to queue' stores format+bitrate from the controls (mp3/320); the item resolves toggles from the live settings", T, () => {
-  const { ctx } = rendererWorld({ format: "audio:mp3", bitrate: "320" });
-  const stored = { id: "q2", url: "https://example.com/v", destId: "", format: "audio:mp3", bitrate: "320", status: "pending" };   // the shape queueAddBtn builds
-  const o = ctx.toDownloadOpts(stored);
+test("Queue tab 'Add to queue' snapshots format, bitrate, autoTag, loudnorm, lufs; later toggle changes do not rewrite that item", T, () => {
+  const { ctx } = rendererWorld({ format: "audio:mp3", bitrate: "320", queueAllFolder: "f:Techno" });
+  const [stored] = ctx.buildQueueItemsFromPaste(["https://example.com/v"]);
+  assert.deepEqual({
+    destId: stored.destId, format: stored.format, bitrate: stored.bitrate,
+    autoTag: stored.autoTag, loudnorm: stored.loudnorm, lufs: stored.lufs, playlist: stored.playlist,
+  }, {
+    destId: "f:Techno", format: "audio:mp3", bitrate: "320",
+    autoTag: true, loudnorm: true, lufs: -14, playlist: false,
+  });
+  const o = ctx.toDownloadOpts({ ...stored, id: "q2" });
   assert.deepEqual({ audioFormat: o.audioFormat, bitrate: o.bitrate, autoTag: o.autoTag, loudnorm: o.loudnorm, lufs: o.lufs },
     { audioFormat: "mp3", bitrate: "320", autoTag: true, loudnorm: true, lufs: -14 });
-  ctx.loudnormEnabled = false; ctx.lufsValue = -9;                       // user later turns Normalize off / picks -9
-  const o2 = ctx.toDownloadOpts(stored);
-  assert.deepEqual({ loudnorm: o2.loudnorm, lufs: o2.lufs }, { loudnorm: false, lufs: -9 }, "still follows the live controls");
+  ctx.loudnormEnabled = false; ctx.lufsValue = -9;
+  const o2 = ctx.toDownloadOpts({ ...stored, id: "q2" });
+  assert.deepEqual({ loudnorm: o2.loudnorm, lufs: o2.lufs }, { loudnorm: true, lufs: -14 }, "snapshotted item keeps enqueue settings");
 });
 test("existing queue items keep their own stored values (192 kbps, Normalize off) - defaults only fill what is missing", T, () => {
   const { ctx } = rendererWorld({});
@@ -290,7 +299,11 @@ test("a saved queue.json is not modified by starting the app, reading settings o
     h.write("queue.json", JSON.stringify([item], null, 2));
     const before = fs.readFileSync(h.p("queue.json"), "utf8");
     await h.invoke("get-settings");
-    assert.deepEqual(await h.invoke("queue-get"), [item]);
+    const [got] = await h.invoke("queue-get");
+    const { outputs, identityState, ...rest } = got;
+    assert.deepEqual(rest, item);
+    assert.deepEqual(outputs, []);
+    assert.equal(identityState, "unknown");
     assert.equal(fs.readFileSync(h.p("queue.json"), "utf8"), before, "byte-identical");
   });
 });
@@ -325,4 +338,55 @@ test("watch folder: items already in the queue keep their stored 192; a new scan
     assert.deepEqual(q[0], legacy);
     await h.invoke("watch-stop");
   });
+});
+
+test("absent audio_format/audio_bitrate: get-settings reports null saved keys; Download tab defaults stay MP3/320", T, async () => {
+  await withConfig({}, async (h) => {
+    const s = await h.invoke("get-settings");
+    assert.equal(s.ui_format, null);
+    assert.equal(s.audio_format, null);
+    assert.equal(s.audio_bitrate, null);
+    assert.equal(htmlSelectedValue("format"), "audio:mp3");
+    assert.equal(htmlSelectedValue("bitrate"), "320");
+  });
+});
+
+test("set-audio-format + set-audio-bitrate round-trip in config.json and get-settings", T, async () => {
+  await withConfig({}, async (h) => {
+    assert.deepEqual(await h.invoke("set-audio-format", "audio:m4a"), { ok: true });
+    assert.deepEqual(await h.invoke("set-audio-bitrate", "192"), { ok: true });
+    const cfg = h.config();
+    assert.equal(cfg.audio_format, "audio:m4a");
+    assert.equal(cfg.audio_bitrate, "192");
+    const s = await h.invoke("get-settings");
+    assert.equal(s.ui_format, "audio:m4a");
+    assert.equal(s.audio_format, "audio:m4a");
+    assert.equal(s.audio_bitrate, "192");
+  });
+});
+
+test("get-settings does not write audio_format into an empty config", T, async () => {
+  await withConfig({}, async (h) => {
+    await h.invoke("get-settings");
+    await h.invoke("get-settings");
+    const saved = h.config();
+    assert.ok(!("audio_format" in saved));
+    assert.ok(!("audio_bitrate" in saved));
+  });
+});
+
+test("invalid format or bitrate is rejected and does not write config", T, async () => {
+  await withConfig({}, async (h) => {
+    assert.deepEqual(await h.invoke("set-audio-format", "audio:ogg"), { ok: false });
+    assert.deepEqual(await h.invoke("set-audio-bitrate", "256"), { ok: false });
+    const saved = h.config();
+    assert.ok(!("audio_format" in saved));
+    assert.ok(!("audio_bitrate" in saved));
+  });
+});
+
+test("renderer applies saved format/bitrate on settings load and persists on change", T, () => {
+  assert.match(RENDERER, /s\.ui_format \|\| s\.audio_format/);
+  assert.match(RENDERER, /api\.setAudioFormat/);
+  assert.match(RENDERER, /api\.setAudioBitrate/);
 });

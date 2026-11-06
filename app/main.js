@@ -11,7 +11,7 @@ const fs = require("fs");
 const os = require("os");
 const https = require("https");
 const { spawn } = require("child_process");
-const { randomUUID } = require("crypto");
+const { randomUUID, createHash } = require("crypto");
 
 const ffmpegStatic = require("ffmpeg-static");
 const ffprobeStatic = require("ffprobe-static");
@@ -31,6 +31,8 @@ const YTDLP_PATH = path.join(BIN_DIR, process.platform === "win32" ? "yt-dlp.exe
 
 // Feature 1 — Queue
 const QUEUE_FILE = path.join(DATA_DIR, "queue.json");
+// Exact-file grants from native Locate (realpath only; not a folder grant).
+const LOCATED_FILES = path.join(DATA_DIR, "located_files.json");
 
 // Feature 2 — Watch-folder
 const WATCH_PROCESSED_LOG = path.join(DATA_DIR, "watch_processed.log");
@@ -48,17 +50,26 @@ function loadConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")); }
   catch { return {}; }
 }
-function saveConfig(cfg) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+function writeJsonAtomic(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + "." + randomUUID() + ".tmp";
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
 }
+function saveConfig(cfg) { writeJsonAtomic(CONFIG_FILE, cfg); }
 // ---------------------------------------------------------------------------
 // Defaults for a fresh configuration
 //  - A key that is ABSENT from config.json was never saved: the default below applies.
 //  - A key that is PRESENT (true or false) is an explicit choice and always wins.
 //  - Defaults are never written into config.json, so they cannot override a saved choice.
-// Audio format and quality are not saved between launches (the Download tab starts from these each
-// time); renderer.js DEFAULT_AUDIO_BITRATE and the selected <option>s in index.html mirror them, and
+// Audio format/bitrate stay at the HTML defaults until the user changes them; then they are stored
+// as audio_format (full select value) and audio_bitrate. Absent keys keep today's MP3 / 320 defaults.
+// renderer.js DEFAULT_AUDIO_BITRATE and the selected <option>s in index.html mirror DEFAULTS, and
 // test/defaults.test.js checks that all of them agree.
 // ---------------------------------------------------------------------------
 const DEFAULTS = Object.freeze({
@@ -104,6 +115,16 @@ function checkFolderName(name) {
 }
 function realOrNull(p) { try { return fs.realpathSync.native(p); } catch (_) { return null; } }
 function entryExists(p) { try { fs.lstatSync(p); return true; } catch (_) { return false; } }
+function missingMountChain(dir) {
+  return !entryExists(dir) && !entryExists(path.dirname(dir));
+}
+const DEST_BAD_TEXT = "This app can't use that location. Choose the folder again.";
+const DEST_UNMOUNTED = {
+  ok: false,
+  error: "This app can't use that location. The drive isn't connected. Reconnect it or choose another folder.",
+  errorCode: "dest_unmounted",
+};
+const DEST_OUTSIDE_TEXT = "This app can't use that location. It's not in the main folder or your favorites. Add the folder as a favorite, or Locate the file.";
 function samePath(a, b) {
   const x = path.resolve(a), y = path.resolve(b);
   return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
@@ -133,7 +154,7 @@ function resolveDestination(targetPath, folder) {
   // malformed is an error, never a silent fallback to the main folder. The main
   // folder is chosen explicitly: no targetPath and folder "" / absent.
   if (targetPath !== undefined && targetPath !== null) {
-    const notAllowed = { ok: false, error: "That destination is not the main folder or one of your favorite folders. Choose it again from the list, or add it as a favorite." };
+    const notAllowed = { ok: false, error: DEST_BAD_TEXT, errorCode: "dest_bad" };
     if (typeof targetPath !== "string" || !targetPath.trim() || targetPath.includes("\u0000") || !path.isAbsolute(targetPath)) return notAllowed;
     const cfg = loadConfig();
     const favs = (Array.isArray(cfg.favorite_folders) ? cfg.favorite_folders : [])
@@ -162,7 +183,9 @@ function resolveOutput(folder) {
 //      delete-file -> the NEW file of a fingerprint-duplicate warning (nothing else);
 //   3. its REAL path (symlinks resolved) is a regular file inside the real path of
 //      the current main folder or of a current favorite folder (descendants allowed;
-//      sibling prefixes such as /a/Music-evil are not inside /a/Music);
+//      sibling prefixes such as /a/Music-evil are not inside /a/Music), OR it is the
+//      exact real file of a persisted Locate grant (located_files.json). A grant is
+//      one file, not its folder. Trash still requires a current root.
 //   4. for trash, the path itself is not a symlink.
 //  The action then uses the resolved real path, not the caller's spelling.
 //  Folders: open-favorite only opens a folder that is a registered favorite
@@ -172,7 +195,8 @@ function resolveOutput(folder) {
 //  data; a swap between the check and the shell call (TOCTOU) is not prevented; the
 //  OS then opens an authorized file with its default handler (no file-type filter).
 //  Files whose folder is no longer the main folder or a favorite are rejected
-//  ("outside"), never redirected; adding that folder as a favorite again restores them.
+//  ("outside") unless that exact file was later granted by Locate; adding that
+//  folder as a favorite again also restores them.
 // ---------------------------------------------------------------------------
 function isInside(root, p, pm = path) {
   const rel = pm.relative(root, p);
@@ -181,6 +205,39 @@ function isInside(root, p, pm = path) {
 function pathKey(p) {
   const r = path.resolve(p);
   return process.platform === "win32" ? r.toLowerCase() : r;
+}
+function allowSetHas(allowedKeys, p) {
+  if (!allowedKeys || typeof p !== "string" || !p) return false;
+  if (allowedKeys.has(pathKey(p))) return true;
+  const real = realOrNull(p);
+  if (real && allowedKeys.has(pathKey(real))) return true;
+  for (const k of allowedKeys) {
+    if (typeof k !== "string" || !k) continue;
+    if (samePath(k, p) || samePath(k, pathKey(p))) return true;
+    if (real && (samePath(k, real) || samePath(pathKey(k), pathKey(real)))) return true;
+    if (sameRealDir(k, p)) return true;
+  }
+  return false;
+}
+function loadLocatedFiles() {
+  try {
+    const v = JSON.parse(fs.readFileSync(LOCATED_FILES, "utf-8"));
+    return Array.isArray(v) ? v.filter((p) => typeof p === "string" && p) : [];
+  } catch { return []; }
+}
+function addLocatedGrant(real) {
+  const list = loadLocatedFiles();
+  if (!list.some((p) => pathKey(p) === pathKey(real) || sameRealDir(p, real))) {
+    list.push(real);
+    writeJsonAtomic(LOCATED_FILES, list);
+  }
+}
+function removeLocatedGrant(real) {
+  const next = loadLocatedFiles().filter((p) => !(pathKey(p) === pathKey(real) || sameRealDir(p, real)));
+  writeJsonAtomic(LOCATED_FILES, next);
+}
+function isLocatedGrant(p) {
+  return loadLocatedFiles().some((g) => pathKey(g) === pathKey(p) || sameRealDir(g, p));
 }
 function validPathArg(p) {
   return typeof p === "string" && p.length > 0 && p.length <= 4096 && !p.includes("\u0000") && path.isAbsolute(p);
@@ -240,7 +297,7 @@ function offeredRevealKeys() {
 // -> { ok:true, real } | { ok:false, code, error }
 function checkManagedFile(p, allowedKeys, { forTrash = false } = {}) {
   if (!validPathArg(p)) return openFail("invalid", "Invalid file path.");
-  if (!allowedKeys.has(pathKey(p))) return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  if (!allowSetHas(allowedKeys, p)) return openFail("not_allowed", "That file is not one this app recorded for this action.");
   const roots = authorizedRoots();
   const real = realOrNull(p);
   if (!real) {
@@ -248,10 +305,11 @@ function checkManagedFile(p, allowedKeys, { forTrash = false } = {}) {
     const lex = path.resolve(p);
     const inside = roots.some(r => isInside(r.root, lex) || (r.real && isInside(r.real, lex)));
     return inside ? openFail("missing", "File not found.")
-                  : openFail("outside", "That file is outside the main folder and your favorite folders.");
+                  : openFail("outside", DEST_OUTSIDE_TEXT);
   }
-  if (!roots.some(r => r.real && isInside(r.real, real))) {
-    return openFail("outside", "That file is outside the main folder and your favorite folders.");
+  const inRoots = roots.some(r => r.real && isInside(r.real, real));
+  if (!inRoots && (forTrash || !isLocatedGrant(p))) {
+    return openFail("outside", DEST_OUTSIDE_TEXT);
   }
   let st;
   try { st = fs.statSync(real); } catch (_) { return openFail("missing", "File not found."); }
@@ -310,39 +368,474 @@ function readHistory(limit = 50, contains = null) {
   }
   return rows.slice(-limit).reverse();
 }
+function recordedPathMatches(stored, target) {
+  if (typeof stored !== "string" || !stored || typeof target !== "string" || !target) return false;
+  if (pathKey(stored) === pathKey(target)) return true;
+  const rs = realOrNull(stored), rt = realOrNull(target);
+  if (rs && rt && samePath(rs, rt)) return true;
+  if (rs && pathKey(rs) === pathKey(target)) return true;
+  if (rt && pathKey(stored) === pathKey(rt)) return true;
+  return false;
+}
+function rewriteJsonlAtomic(file, mapRow) {
+  if (!fs.existsSync(file)) return;
+  const rows = fs.readFileSync(file, "utf-8").split("\n").filter(Boolean);
+  const out = rows.map((line) => {
+    try {
+      const row = JSON.parse(line);
+      const next = mapRow(row);
+      return JSON.stringify(next == null ? row : next);
+    } catch { return line; }
+  });
+  const tmp = file + "." + randomUUID() + ".tmp";
+  try {
+    fs.writeFileSync(tmp, out.map((l) => l + "\n").join(""));
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw e;
+  }
+}
+function rewriteRecordedPaths(oldPaths, real) {
+  const olds = (oldPaths || []).filter((p) => typeof p === "string" && p);
+  const match = (stored) => olds.some((o) => recordedPathMatches(stored, o));
+  rewriteJsonlAtomic(HISTORY_FILE, (row) => {
+    if (!match(row.file)) return row;
+    return { ...row, file: real, folder: path.dirname(real) };
+  });
+  rewriteJsonlAtomic(DL_INDEX_FILE, (row) => {
+    if (!match(row.file)) return row;
+    return { ...row, file: real };
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Feature 1 — Queue helpers
 // ---------------------------------------------------------------------------
 function loadQueue() {
-  try { return JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8")); }
-  catch { return []; }
+  try {
+    const v = JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
 }
-function saveQueue(q) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(QUEUE_FILE, JSON.stringify(q, null, 2));
+function saveQueue(q) { writeJsonAtomic(QUEUE_FILE, Array.isArray(q) ? q : []); }
+
+const MAIN_OWNED_FIELDS = ["files", "outputs", "outputDir", "encodePlan", "sourcePath"];
+function stripMainOwned(item, previous) {
+  const copy = { ...(item || {}) };
+  for (const k of MAIN_OWNED_FIELDS) {
+    if (previous && Object.prototype.hasOwnProperty.call(previous, k)) copy[k] = previous[k];
+    else delete copy[k];
+  }
+  return copy;
+}
+function actualFormatLabel(item, filePath) {
+  const ext = path.extname(filePath || "").replace(".", "").toLowerCase();
+  const plan = item && item.encodePlan;
+  if (plan && plan.mode === "copy") {
+    const fmt = plan.targetFormat || ext || "audio";
+    if (plan.sourceAbr != null) return `${fmt} source ~${Math.round(Number(plan.sourceAbr))} kbps preserved`;
+    return `${fmt} source preserved`;
+  }
+  if (plan && plan.targetFormat) {
+    return plan.targetBitrate ? `${plan.targetFormat} ${plan.targetBitrate}kbps` : String(plan.targetFormat);
+  }
+  if (item && item.format === "video:original") return "original";
+  return ext || "";
+}
+function queueOutputAllowKeys(item) {
+  const keys = new Set();
+  if (item && Array.isArray(item.files)) {
+    for (const f of item.files) {
+      if (typeof f === "string" && f) keys.add(pathKey(f));
+    }
+  }
+  return keys;
+}
+function classifyOutputPath(p, item) {
+  const ext = (typeof p === "string" && p) ? path.extname(p) : "";
+  const label = actualFormatLabel(item, p);
+  let bytes = null;
+  try {
+    if (typeof p === "string" && fs.existsSync(p) && fs.statSync(p).isFile()) bytes = fs.statSync(p).size;
+  } catch (_) {}
+  if (!validPathArg(p)) {
+    return { path: p, actualExt: ext, actualFormatLabel: label, bytes: null, state: "unknown" };
+  }
+  const allow = new Set([...historyFileKeys(), ...queueOutputAllowKeys(item)]);
+  const chk = checkManagedFile(p, allow);
+  if (chk.ok) return { path: p, actualExt: ext, actualFormatLabel: label, bytes, state: "present" };
+  if (chk.code === "outside") return { path: p, actualExt: ext, actualFormatLabel: label, bytes, state: "outside" };
+  if (chk.code === "missing") return { path: p, actualExt: ext, actualFormatLabel: label, bytes: null, state: "missing" };
+  if (!fs.existsSync(p)) return { path: p, actualExt: ext, actualFormatLabel: label, bytes: null, state: "missing" };
+  return { path: p, actualExt: ext, actualFormatLabel: label, bytes, state: "outside" };
+}
+function collectCandidatePaths(item) {
+  const out = [];
+  const seen = new Set();
+  const add = (p) => {
+    if (typeof p !== "string" || !p || !path.isAbsolute(p)) return;
+    const k = pathKey(p);
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(p);
+  };
+  if (Array.isArray(item.files)) item.files.forEach(add);
+  if (!out.length && item.url) {
+    const rows = readHistory(Number.MAX_SAFE_INTEGER).filter((r) => r && r.url === item.url && r.file);
+    const prefer = item.outputDir;
+    const ranked = prefer
+      ? [...rows.filter((r) => r.folder === prefer || (typeof r.folder === "string" && r.folder.startsWith(prefer + path.sep))), ...rows]
+      : rows;
+    ranked.forEach((r) => add(r.file));
+  }
+  return out;
+}
+function resolveQueueOutputs(item) {
+  if (!item || item.status !== "done") return { outputs: [], identityState: null };
+  const outputs = collectCandidatePaths(item).map((p) => classifyOutputPath(p, item));
+  let identityState = "unknown";
+  if (!outputs.length) identityState = "unknown";
+  else if (outputs.some((o) => o.state === "present")) identityState = "present";
+  else if (outputs.every((o) => o.state === "outside")) identityState = "outside";
+  else identityState = "missing";
+  return { outputs, identityState };
+}
+function viewQueue() {
+  return loadQueue().map((it) => (it.status === "done" ? { ...it, ...resolveQueueOutputs(it) } : it));
 }
 
-ipcMain.handle("queue-get", () => loadQueue());
+ipcMain.handle("queue-get", () => viewQueue());
 
-ipcMain.handle("queue-set", (_e, q) => { saveQueue(q); return { ok: true }; });
+ipcMain.handle("queue-set", (_e, q) => {
+  const prevById = new Map(loadQueue().map((i) => [i.id, i]));
+  const incoming = Array.isArray(q) ? q : [];
+  saveQueue(incoming.map((item) => stripMainOwned(item, prevById.get(item && item.id))));
+  return { ok: true };
+});
 
 ipcMain.handle("queue-add", (_e, items) => {
   const q = loadQueue();
-  const newItems = (items || []).map(item => ({
-    id: randomUUID(), status: "pending", title: null, error: null, ...item,
-  }));
+  const newItems = (items || []).map((item) => {
+    const stripped = stripMainOwned(item, null);
+    return { id: randomUUID(), status: "pending", title: null, error: null, ...stripped };
+  });
   q.push(...newItems);
   saveQueue(q);
   return { ok: true, items: newItems };
 });
 
-ipcMain.handle("queue-clear", () => { saveQueue([]); return { ok: true }; });
-
 ipcMain.handle("queue-update-item", (_e, patch) => {
+  if (!patch || typeof patch.id !== "string") return { ok: false, code: "invalid", error: "Invalid queue item." };
   const q = loadQueue();
-  const i = q.findIndex(x => x.id === patch.id);
-  if (i >= 0) { Object.assign(q[i], patch); saveQueue(q); }
+  const i = q.findIndex((x) => x.id === patch.id);
+  if (i < 0) return { ok: true };
+  const safe = { ...patch };
+  for (const k of MAIN_OWNED_FIELDS) delete safe[k];
+  delete safe.id;
+  const cur = q[i].status;
+  if (Object.prototype.hasOwnProperty.call(safe, "status")) {
+    if (cur === "running" && safe.status !== "running") {
+      return { ok: false, code: "running", error: "That item is already downloading." };
+    }
+    if (safe.status === "running" && cur !== "running") {
+      return { ok: false, code: "not_allowed", error: "The queue runner owns the running state." };
+    }
+  }
+  Object.assign(q[i], safe);
+  saveQueue(q);
+  return { ok: true };
+});
+
+let locatePick = null;
+ipcMain.handle("queue-reveal-output", async (_e, itemId, filePath) => {
+  const item = loadQueue().find((i) => i.id === itemId);
+  if (!item || item.status !== "done") return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  const { outputs } = resolveQueueOutputs(item);
+  if (!outputs.some((o) => o.state === "present" && pathKey(o.path) === pathKey(filePath))) {
+    return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  }
+  const allow = new Set([...historyFileKeys(), ...queueOutputAllowKeys(item)]);
+  const chk = checkManagedFile(filePath, allow);
+  if (!chk.ok) return chk;
+  try { shell.showItemInFolder(chk.real); } catch (_) { return openFail("open_failed", "The system could not show it."); }
+  return { ok: true };
+});
+
+ipcMain.handle("queue-locate-file", async (_e, itemId) => {
+  const item = loadQueue().find((i) => i.id === itemId);
+  if (!item || item.status !== "done") return openFail("not_allowed", "That item cannot be located.");
+  const resolved = resolveQueueOutputs(item);
+  if (item.playlist && resolved.identityState === "unknown") {
+    return openFail("not_allowed", "Locate one file at a time is not available for this playlist. Use History.");
+  }
+  locatePick = null;
+  const r = await dialog.showOpenDialog(mainWindow, { title: "Locate file", properties: ["openFile"] });
+  if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  locatePick = r.filePaths[0];
+  const picked = r.filePaths[0];
+  if (picked !== locatePick) {
+    locatePick = null;
+    return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  }
+  locatePick = null;
+  if (!validPathArg(picked)) return openFail("invalid", "Invalid file path.");
+  const real = realOrNull(picked);
+  if (!real) return openFail("missing", "File not found.");
+  let st;
+  try { st = fs.statSync(real); } catch (_) { return openFail("missing", "File not found."); }
+  if (!st.isFile()) return openFail("not_file", "Not a regular file.");
+  const oldPaths = [
+    ...(Array.isArray(item.files) ? item.files : []),
+    ...collectCandidatePaths(item),
+  ];
+  try {
+    addLocatedGrant(real);
+    try {
+      rewriteRecordedPaths(oldPaths, real);
+      if (!allowSetHas(historyFileKeys(), real)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.appendFileSync(HISTORY_FILE, JSON.stringify({
+          action: item.url ? (String(item.format || "").startsWith("video") ? "video" : "audio") : "located",
+          url: item.url || "",
+          title: path.basename(real),
+          folder: path.dirname(real),
+          file: real,
+          details: actualFormatLabel({ ...item, files: [real] }, real) || "located",
+          time: new Date().toISOString(),
+        }) + "\n");
+      }
+      patchQueueItem(item.id, { files: [real], outputDir: path.dirname(real) });
+    } catch (inner) {
+      try { removeLocatedGrant(real); } catch (_) {}
+      throw inner;
+    }
+  } catch (_) {
+    return openFail("persist_failed", "Could not save the new location. The file was not moved.");
+  }
+  const next = loadQueue().find((i) => i.id === itemId);
+  return { ok: true, ...resolveQueueOutputs(next) };
+});
+
+ipcMain.handle("queue-add-output-folder", (_e, itemId, filePath) => {
+  const item = loadQueue().find((i) => i.id === itemId);
+  if (!item || item.status !== "done") return openFail("not_allowed", "That folder cannot be added.");
+  const { outputs } = resolveQueueOutputs(item);
+  const hit = outputs.find((o) => pathKey(o.path) === pathKey(filePath));
+  if (!hit) return openFail("not_allowed", "That file is not one this app recorded for this action.");
+  if (!validPathArg(filePath)) return openFail("invalid", "Invalid file path.");
+  const dir = path.dirname(filePath);
+  const cfg = loadConfig();
+  cfg.favorite_folders = Array.isArray(cfg.favorite_folders) ? cfg.favorite_folders : [];
+  if (!cfg.favorite_folders.some((f) => samePath(f.path, dir))) {
+    cfg.favorite_folders.push({ path: dir, name: path.basename(dir), added: new Date().toISOString() });
+    saveConfig(cfg);
+  }
+  return { ok: true, path: dir, name: path.basename(dir) };
+});
+
+ipcMain.handle("queue-clear-finished", () => {
+  saveQueue(loadQueue().filter((i) => i.status !== "done"));
+  emitQueueChanged();
+  return { ok: true, removed: true };
+});
+ipcMain.handle("queue-remove-errors", () => {
+  // `flagged` is not a live status (queue fingerprint marks use fpDup on done rows).
+  // Still drop leftover flagged rows so an old queue.json is not stuck.
+  const drop = new Set(["error", "skipped", "canceled", "flagged"]);
+  saveQueue(loadQueue().filter((i) => !drop.has(i.status)));
+  emitQueueChanged();
+  return { ok: true, removed: true };
+});
+
+const SelektDest = require("./renderer/destination.js");
+// Exclusive runner: idle | running | paused | stopping. `running` on queue-status
+// means the loop is alive (not idle), including paused and stopping.
+const queueRunner = { state: "idle", currentId: null };
+function runnerLive() { return queueRunner.state !== "idle"; }
+function queueRunnerStatus() {
+  return {
+    state: queueRunner.state,
+    running: runnerLive(),
+    paused: queueRunner.state === "paused",
+    currentId: queueRunner.currentId,
+  };
+}
+function emitQueueChanged() {
+  if (mainWindow) mainWindow.webContents.send("queue-changed");
+}
+function queueItemToDownloadOpts(item) {
+  const dest = SelektDest.queueItemDest(item);
+  const cfg = loadConfig();
+  let format = item.format;
+  if (!format && item.type === "audio") format = "audio:" + (item.audioFormat || DEFAULTS.audioFormat);
+  if (!format && item.type === "video") format = "video:" + (item.quality || "best");
+  if (!format) format = "audio:mp3";
+  const [kind, val] = String(format).split(":");
+  const isPlaylist = !!item.playlist;
+  const opts = {
+    url: item.url,
+    type: isPlaylist ? "playlist" : (kind === "audio" ? "audio" : "video"),
+    audioFormat: kind === "audio" ? val : undefined,
+    bitrate: item.bitrate || DEFAULTS.audioBitrate,
+    quality: kind === "video" ? val : undefined,
+    noConvert: val === "original" || undefined,
+    force: !!item.force,
+    autoTag: item.autoTag !== undefined ? item.autoTag : cfgFlag(cfg, "auto_tag"),
+    loudnorm: item.loudnorm !== undefined ? item.loudnorm : cfgFlag(cfg, "loudnorm"),
+    lufs: item.lufs !== undefined ? item.lufs : cfgLufs(cfg),
+    _inQueue: true,
+    _queueId: item.id,
+  };
+  if (isPlaylist && kind === "audio") opts.audioOnly = true;
+  if (isPlaylist && Array.isArray(item.playlistItems) && item.playlistItems.length) {
+    opts.playlistItems = item.playlistItems;
+  }
+  Object.assign(opts, dest);
+  return opts;
+}
+function patchQueueItem(id, patch) {
+  const q = loadQueue();
+  const i = q.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  Object.assign(q[i], patch);
+  saveQueue(q);
+  emitQueueChanged();
+}
+function cancelPendingItems() {
+  const q = loadQueue();
+  let n = 0;
+  for (const it of q) {
+    if (it.status === "pending") {
+      it.status = "canceled";
+      it.error = null;
+      it.note = "Cancelled — ↻ to retry";
+      n++;
+    }
+  }
+  if (n) saveQueue(q);
+  emitQueueChanged();
+  return n;
+}
+async function runQueueLoop() {
+  try {
+    while (runnerLive()) {
+      if (queueRunner.state === "stopping") {
+        cancelPendingItems();
+        break;
+      }
+      if (queueRunner.state === "paused") {
+        await new Promise((r) => setTimeout(r, 200));
+        continue;
+      }
+      const q = loadQueue();
+      const item = q.find((i) => i.status === "pending");
+      if (!item) {
+        await new Promise((r) => setImmediate(r));
+        if (queueRunner.state === "stopping" || queueRunner.state === "idle") break;
+        if (queueRunner.state === "paused") continue;
+        if (!loadQueue().find((i) => i.status === "pending")) break;
+        continue;
+      }
+      queueRunner.currentId = item.id;
+      patchQueueItem(item.id, { status: "running" });
+      const dest = SelektDest.queueItemDest(item);
+      let r;
+      if (dest.destInvalid) {
+        r = { ok: false, error: DEST_BAD_TEXT, errorCode: "dest_bad" };
+      } else {
+        try { r = await handleDownload(queueItemToDownloadOpts(item), "queue"); }
+        catch (e) { r = { ok: false, error: String(e) }; }
+      }
+      let status = "error";
+      let title = item.title;
+      let error = null;
+      let note = null;
+      if (r && r.ok) {
+        status = "done";
+        if (r.files && r.files[0]) title = path.basename(r.files[0]);
+        const bits = [];
+        if (r.normalizeWarning && Array.isArray(r.normalizeWarning.failed) && r.normalizeWarning.failed.length) {
+          bits.push("normalization warning");
+        }
+        if (r.tagWarning && r.tagWarning.failed) bits.push("tagging incomplete");
+        note = bits.length ? bits.join("; ") : null;
+      } else if (r && r.canceled) {
+        status = "canceled";
+        note = "Cancelled — ↻ to retry";
+      } else if (r && (r.duplicate || r.skipped)) {
+        status = "skipped";
+        note = "Already in folder (duplicate) — ↻ to download anyway";
+      } else {
+        error = (r && r.error) || "download failed";
+      }
+      patchQueueItem(item.id, {
+        status, title, error, note,
+        errorCode: (r && r.errorCode) || null,
+        needsCookies: !!(r && r.needsCookies),
+        files: (r && r.files) || null,
+        outputDir: (r && r.folder) || null,
+        encodePlan: (r && r.encodePlan) || null,
+        normalize: (r && r.normalizeWarning) || null,
+        tagWarning: (r && r.tagWarning) || null,
+        keptFiles: (r && r.keptFiles) || null,
+        normalizedFiles: (r && r.normalizedFiles) || null,
+        progress: null,
+      });
+      queueRunner.currentId = null;
+      if (queueRunner.state === "stopping") {
+        cancelPendingItems();
+        break;
+      }
+    }
+  } finally {
+    queueRunner.state = "idle";
+    queueRunner.currentId = null;
+    emitQueueChanged();
+    if (mainWindow) mainWindow.webContents.send("queue-idle");
+  }
+}
+ipcMain.handle("queue-start", () => {
+  if (queueRunner.state === "paused") {
+    queueRunner.state = "running";
+    emitQueueChanged();
+    return { ok: true, ...queueRunnerStatus() };
+  }
+  if (queueRunner.state === "running" || queueRunner.state === "stopping") {
+    return { ok: true, ...queueRunnerStatus() };
+  }
+  queueRunner.state = "running";
+  queueRunner.currentId = null;
+  setImmediate(() => { runQueueLoop(); });
+  return { ok: true, ...queueRunnerStatus() };
+});
+ipcMain.handle("queue-pause", () => {
+  if (queueRunner.state === "running") {
+    queueRunner.state = "paused";
+    emitQueueChanged();
+  }
+  return { paused: queueRunner.state === "paused", ...queueRunnerStatus() };
+});
+ipcMain.handle("queue-stop-all", () => {
+  if (runnerLive()) {
+    queueRunner.state = "stopping";
+    cancelJob("queue");
+  }
+  return { ok: true, ...queueRunnerStatus() };
+});
+ipcMain.handle("queue-cancel", () => {
+  if (!runnerLive()) return { ok: true, killed: false };
+  const killed = cancelJob("queue");
+  return { ok: true, killed };
+});
+ipcMain.handle("queue-status", () => queueRunnerStatus());
+ipcMain.handle("queue-clear", () => {
+  if (runnerLive()) {
+    queueRunner.state = "stopping";
+    cancelJob("queue");
+  }
+  saveQueue([]);
+  emitQueueChanged();
   return { ok: true };
 });
 
@@ -657,7 +1150,18 @@ const YTDLP_VARIANT = "standalone-1";   // bump to force a one-time re-download
 function ytdlpAssetName() {
   if (process.platform === "win32") return "yt-dlp.exe";
   if (process.platform === "darwin") return "yt-dlp_macos";   // universal, bundles Python
-  return "yt-dlp_linux";                                       // bundles Python
+  return process.arch === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
+}
+
+function sha256File(p) {
+  return createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+}
+function parseSha256Sums(text, asset) {
+  for (const line of String(text).split("\n")) {
+    const m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(\S+)$/);
+    if (m && m[2] === asset) return m[1].toLowerCase();
+  }
+  return null;
 }
 
 // Download limits. The stall limit is a socket-idle timeout (no bytes for this long = dead
@@ -766,9 +1270,51 @@ function downloadYtdlp() {
   if (!ytdlpInstall) {
     ytdlpInstall = (async () => {
       sweepStaleYtdlpParts();
-      const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytdlpAssetName()}`;
-      await downloadTo(url, YTDLP_PATH, { minBytes: YTDLP_MIN_BYTES, mode: process.platform === "win32" ? null : 0o755 });
-      try { fs.writeFileSync(YTDLP_VARIANT_FILE, YTDLP_VARIANT); } catch (_) {}
+      const tag = await latestYtdlpTag();
+      if (!tag) throw new Error("Could not determine yt-dlp release");
+      const asset = ytdlpAssetName();
+      const tagged = `https://github.com/yt-dlp/yt-dlp/releases/download/${encodeURIComponent(tag)}`;
+      const sumsUrl = `${tagged}/SHA2-256SUMS`;
+      const assetUrl = `${tagged}/${asset}`;
+
+      const sumsDest = path.join(BIN_DIR, "SHA2-256SUMS." + randomUUID() + ".tmp");
+      let expectedHash = null;
+      let sumsPresent = false;
+      try {
+        await downloadTo(sumsUrl, sumsDest, { minBytes: 32 });
+        sumsPresent = true;
+        expectedHash = parseSha256Sums(fs.readFileSync(sumsDest, "utf8"), asset);
+      } catch (e) {
+        if (!/HTTP 404/.test(e.message || "")) throw e;
+        // Sums file missing: size-floor install of this same tag only (not /latest/download/).
+      } finally {
+        try { fs.unlinkSync(sumsDest); } catch (_) {}
+      }
+      if (sumsPresent && !expectedHash) throw new Error("Checksum missing for " + asset);
+
+      const staged = YTDLP_PATH + "." + randomUUID() + ".new";
+      const bak = YTDLP_PATH + ".bak";
+      try {
+        await downloadTo(assetUrl, staged, { minBytes: YTDLP_MIN_BYTES, mode: process.platform === "win32" ? null : 0o755 });
+        if (expectedHash && sha256File(staged) !== expectedHash) throw new Error("Checksum mismatch");
+        if (fs.existsSync(YTDLP_PATH)) {
+          try { fs.unlinkSync(bak); } catch (_) {}
+          fs.renameSync(YTDLP_PATH, bak);
+        }
+        try {
+          fs.renameSync(staged, YTDLP_PATH);
+          if (expectedHash && sha256File(YTDLP_PATH) !== expectedHash) throw new Error("Checksum mismatch");
+          try { fs.writeFileSync(YTDLP_VARIANT_FILE, YTDLP_VARIANT); } catch (_) {}
+        } catch (e) {
+          if (fs.existsSync(bak)) {
+            try { fs.unlinkSync(YTDLP_PATH); } catch (_) {}
+            try { fs.renameSync(bak, YTDLP_PATH); } catch (_) {}
+          }
+          throw e;
+        }
+      } finally {
+        try { fs.unlinkSync(staged); } catch (_) {}
+      }
     })().finally(() => { ytdlpInstall = null; });
   }
   return ytdlpInstall;
@@ -897,23 +1443,36 @@ function isStaleEngineError(msg) {
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Cancel support
-// Downloads run strictly one at a time (the queue is sequential), so a single
-// handle to the in-flight child process is enough. `cancelRequested` survives
-// the kill so the close handler can tell "user cancelled" from "yt-dlp failed".
+// Queue runner and leftover single-download IPC each own a child set so Stop
+// all / Cancel cannot clobber the other action's process. `cancelRequested`
+// is per job so the close handler can tell "user cancelled" from "yt-dlp failed".
 // ---------------------------------------------------------------------------
-let activeChild = null;
-let cancelRequested = false;
-
-function trackChild(c) { activeChild = c; return c; }
-function untrackChild(c) { if (activeChild === c) activeChild = null; }
-
-function killActiveChild() {
-  const c = activeChild;
-  if (!c) return false;
-  try { c.kill("SIGTERM"); } catch (_) {}
-  // yt-dlp/ffmpeg normally exit on SIGTERM; escalate if one hangs.
-  setTimeout(() => { try { if (c.exitCode === null && !c.killed) c.kill("SIGKILL"); } catch (_) {} }, 2000);
+function makeJob() { return { children: new Set(), cancelRequested: false }; }
+const jobs = { queue: makeJob(), single: makeJob() };
+function jobOf(name) { return jobs[name] || jobs.single; }
+function jobCanceled(job) { return !!jobOf(job).cancelRequested; }
+function trackChild(c, job) {
+  const j = jobOf(job);
+  j.children.add(c);
+  const drop = () => j.children.delete(c);
+  c.once("close", drop);
+  c.once("error", drop);
+  return c;
+}
+function killJobChildren(job) {
+  const kids = [...jobOf(job).children];
+  if (!kids.length) return false;
+  for (const c of kids) {
+    try { c.kill("SIGTERM"); } catch (_) {}
+    setTimeout(() => {
+      try { if (jobOf(job).children.has(c) && c.exitCode === null && !c.killed) c.kill("SIGKILL"); } catch (_) {}
+    }, 2000);
+  }
   return true;
+}
+function cancelJob(job) {
+  jobOf(job).cancelRequested = true;
+  return killJobChildren(job);
 }
 
 // Remove yt-dlp's half-written files so a cancelled download leaves nothing
@@ -936,12 +1495,11 @@ function canceledError() {
 }
 
 ipcMain.handle("cancel-download", () => {
-  cancelRequested = true;
-  const killed = killActiveChild();
+  const killed = cancelJob("single");
   return { ok: true, killed };
 });
 
-function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdateRetry = false) {
+function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdateRetry = false, job = "single") {
   return new Promise((resolve, reject) => {
     const files = [];
     let stderr = "";
@@ -949,8 +1507,8 @@ function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdate
     // seeded from the known selection count so it's correct from the first tick.
     let itemPos = 0, itemTotal = plTotal || 0, itemTitle = "", lastItemKey = "";
     // Cancel arrived between the queue picking this item and the spawn.
-    if (cancelRequested) return reject(canceledError());
-    const child = trackChild(spawn(YTDLP_PATH, args, { windowsHide: true }));
+    if (jobCanceled(job)) return reject(canceledError());
+    const child = trackChild(spawn(YTDLP_PATH, args, { windowsHide: true }), job);
 
     const emit = (extra) => { if (onProgress) onProgress({ itemPos, itemTotal, itemTitle, ...extra }); };
 
@@ -997,12 +1555,11 @@ function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdate
     };
     child.stdout.on("data", (d) => handleData(d, true));
     child.stderr.on("data", (d) => handleData(d, false));
-    child.on("error", (e) => { untrackChild(child); reject(e); });
+    child.on("error", (e) => { reject(e); });
     child.on("close", (code) => {
-      untrackChild(child);
       // User pressed Cancel — report that, not the SIGTERM exit code, and don't
       // fall through to the cookie retry (which would start a new download).
-      if (cancelRequested) return reject(canceledError());
+      if (jobCanceled(job)) return reject(canceledError());
       if (code === 0) return resolve(files);
       // With --ignore-errors on a playlist, yt-dlp can exit non-zero yet still have
       // downloaded some entries — keep those instead of throwing them all away.
@@ -1018,23 +1575,29 @@ function runYtdlp(args, onProgress, plTotal = 0, noCookieRetry = false, noUpdate
       // once WITHOUT cookies so public downloads still work; login-required ones
       // will then fail with a clear "needs cookies" hint instead of this.
       if (!noCookieRetry && args.includes("--cookies-from-browser") && isCookieStoreError(stderr)) {
-        return resolve(runYtdlp(stripCookieArgs(args), onProgress, plTotal, true, noUpdateRetry));
+        if (onProgress) onProgress({ phase: "retry", reason: "cookies_store" });
+        status("Retrying without browser cookies…");
+        return resolve(runYtdlp(stripCookieArgs(args), onProgress, plTotal, true, noUpdateRetry, job));
       }
       // "403 Forbidden" / "format not available" on a link that plays fine in a
       // browser almost always means YouTube changed something our bundled yt-dlp
       // doesn't know about yet. Update the engine and retry the download ONCE
       // before showing the user an error they can't act on.
       if (!noUpdateRetry && isStaleEngineError(stderr)) {
+        if (onProgress) onProgress({ phase: "engine-update", reason: "engine_stale" });
         status("Updating the download engine…");
         return resolve(
           forceUpdateYtdlp().then((updated) => {
             statusReady();
             if (!updated) throw new Error(full);   // already newest — real failure
-            return runYtdlp(args, onProgress, plTotal, noCookieRetry, true);
+            return runYtdlp(args, onProgress, plTotal, noCookieRetry, true, job);
           })
         );
       }
-      reject(new Error(full));
+      const fail = new Error(full);
+      if (noCookieRetry) fail.retryKind = "cookies_store";
+      else if (noUpdateRetry) fail.retryKind = "engine_stale";
+      reject(fail);
     });
   });
 }
@@ -1066,17 +1629,21 @@ function isCookieStoreError(msg) {
 // Spawn yt-dlp to collect stdout JSON (info/playlist). Retries once without
 // cookies if the cookie store can't be read, so a bad "Browser cookies" setting
 // doesn't break the picker or dup/tag probe on public content.
-function ytdlpJson(args, noCookieRetry = false) {
+function ytdlpJson(args, noCookieRetry = false, job = null) {
   return new Promise((resolve, reject) => {
     let buf = "", err = "";
+    if (job && jobCanceled(job)) return reject(canceledError());
     const c = spawn(YTDLP_PATH, args, { windowsHide: true });
+    if (job) trackChild(c, job);
     c.stdout.on("data", d => buf += d);
     c.stderr.on("data", d => err += d);
     c.on("error", reject);
     c.on("close", (code) => {
+      if (job && jobCanceled(job)) return reject(canceledError());
       if (buf.trim()) return resolve(buf);
       if (!noCookieRetry && args.includes("--cookies-from-browser") && isCookieStoreError(err)) {
-        return resolve(ytdlpJson(stripCookieArgs(args), true));
+        status("Retrying without browser cookies…");
+        return resolve(ytdlpJson(stripCookieArgs(args), true, job));
       }
       reject(new Error(err.trim() || ("yt-dlp exited " + code)));
     });
@@ -1086,6 +1653,14 @@ function ytdlpJson(args, noCookieRetry = false) {
 // Turn yt-dlp's raw failure into a flag the UI can act on (offer the cookie fix).
 function isCookieError(msg) {
   return /sign in to confirm your age|confirm you'?re not a bot|--cookies|cookies-from-browser|age-restricted|inappropriate for some users/i.test(msg || "");
+}
+function errorInfo(msg, extra = {}) {
+  if (isCookieError(msg)) return { code: "cookies_needed", needsCookies: true, retryKind: extra.retryKind || null };
+  if (isCookieStoreError(msg)) return { code: "cookies_store", needsCookies: false, retryKind: extra.retryKind || "cookies_store" };
+  if (isStaleEngineError(msg)) return { code: "engine_stale", needsCookies: false, retryKind: extra.retryKind || "engine_stale" };
+  if (/unsupported url/i.test(msg || "")) return { code: "unsupported_url", needsCookies: false, retryKind: extra.retryKind || null };
+  if (/timed out|connection lost|econnreset|enotfound/i.test(msg || "")) return { code: "network", needsCookies: false, retryKind: extra.retryKind || null };
+  return { code: "unknown", needsCookies: false, retryKind: extra.retryKind || null };
 }
 
 // Every URL that reaches yt-dlp (info, playlist fetch, download) goes through
@@ -1194,11 +1769,15 @@ app.whenReady().then(() => {
     if (cfg.watch_enabled) {
       startWatchFile(cfg.watch_inbox_path || defaultWatchInboxPath());
     }
-    // Reset any stale "running" queue items to "pending" (app was killed mid-run)
-    const q = loadQueue();
-    let changed = false;
-    q.forEach(item => { if (item.status === "running") { item.status = "pending"; changed = true; } });
-    if (changed) saveQueue(q);
+    // Reset stale "running" items only when the runner is not active (app restart).
+    // A renderer reload (did-finish-load) while the main-owned loop is working
+    // must not flip the active row back to pending or start a second spawn.
+    if (queueRunner.state === "idle") {
+      const q = loadQueue();
+      let changed = false;
+      q.forEach(item => { if (item.status === "running") { item.status = "pending"; changed = true; } });
+      if (changed) saveQueue(q);
+    }
   });
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1261,6 +1840,9 @@ ipcMain.handle("get-settings", () => {
     cookies_browser: cfg.cookies_browser || "",   // "" = no cookies
     folder_view: cfg.folder_view === "list" ? "list" : "chips", // Download-tab folder layout
     folder_density: cfg.folder_density === "comfortable" ? "comfortable" : "compact", // default compact
+    ui_format: savedUiFormat(cfg),
+    audio_format: savedUiFormat(cfg),
+    audio_bitrate: savedBitrate(cfg),
   };
 });
 
@@ -1282,6 +1864,33 @@ ipcMain.handle("set-prevent-duplicates", (_e, val) => {
 });
 
 ipcMain.handle("set-auto-tag",       (_e, v) => { const c = loadConfig(); c.auto_tag = !!v; saveConfig(c); return { ok: true }; });
+const ALLOWED_UI_FORMATS = new Set([
+  "audio:mp3", "audio:m4a", "audio:wav", "audio:flac",
+  "video:original", "video:1080", "video:720", "video:best",
+]);
+function savedUiFormat(cfg) {
+  return ALLOWED_UI_FORMATS.has(cfg.audio_format) ? cfg.audio_format : null;
+}
+function savedBitrate(cfg) {
+  const v = cfg.audio_bitrate == null ? null : String(cfg.audio_bitrate);
+  return v === "128" || v === "192" || v === "320" ? v : null;
+}
+ipcMain.handle("set-audio-format", (_e, v) => {
+  const val = String(v || "");
+  if (!ALLOWED_UI_FORMATS.has(val)) return { ok: false };
+  const c = loadConfig();
+  c.audio_format = val;
+  saveConfig(c);
+  return { ok: true };
+});
+ipcMain.handle("set-audio-bitrate", (_e, v) => {
+  const val = String(v || "");
+  if (val !== "128" && val !== "192" && val !== "320") return { ok: false };
+  const c = loadConfig();
+  c.audio_bitrate = val;
+  saveConfig(c);
+  return { ok: true };
+});
 ipcMain.handle("set-loudnorm",       (_e, v) => { const c = loadConfig(); c.loudnorm = !!v; saveConfig(c); return { ok: true }; });
 ipcMain.handle("set-lufs",           (_e, v) => { const c = loadConfig(); c.lufs = Number(v) || DEFAULTS.lufs; saveConfig(c); return { ok: true }; });
 ipcMain.handle("set-suggest-folder", (_e, v) => { const c = loadConfig(); c.suggest_folder = !!v; saveConfig(c); return { ok: true }; });
@@ -1456,10 +2065,10 @@ ipcMain.handle("fetch-playlist", async (_e, rawUrl) => {
   }
 });
 
-async function probeInfo(rawUrl) {
+async function probeInfo(rawUrl, job = null) {
   const urlCheck = checkYtdlpUrl(rawUrl);
   if (!urlCheck.ok) throw new Error(urlCheck.error);
-  const out = await ytdlpJson(["-J", "--no-playlist", ...cookieArgs(), "--", urlCheck.url]);
+  const out = await ytdlpJson(["-J", "--no-playlist", ...cookieArgs(), "--", urlCheck.url], false, job);
   const j = JSON.parse(out);
   const fmts = Array.isArray(j.formats) ? j.formats : [];
   const audio = fmts.filter(f => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"));
@@ -1561,10 +2170,11 @@ function splitArtistTitle(rawTitle, info) {
   return { artist: (info && info.uploader) || "", title: t };
 }
 
-function tagAudioFile(file, { url, genre, info }) {
+function tagAudioFile(file, { url, genre, info }, job = null) {
   return new Promise((resolve) => {
     const ext = path.extname(file).toLowerCase();
     if (ext === ".wav") return resolve({ skipped: "wav" });
+    if (job && jobCanceled(job)) return resolve({ canceled: true });
     const rawTitle = path.basename(file, ext).replace(/\s*\[[^\]]+\]$/, "");
     const { artist, title } = splitArtistTitle(rawTitle, info);
     const tmp = file + ".tag" + ext;
@@ -1576,10 +2186,13 @@ function tagAudioFile(file, { url, genre, info }) {
       "-metadata", `comment=${url}`,
       tmp];
     const c = spawn(ffmpeg, args, { windowsHide: true });
-    c.on("error", () => resolve({ error: true }));
+    if (job) trackChild(c, job);
+    const dropTmp = () => { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {} };
+    c.on("error", () => { dropTmp(); resolve(job && jobCanceled(job) ? { canceled: true } : { error: true }); });
     c.on("close", (code) => {
+      if (job && jobCanceled(job)) { dropTmp(); return resolve({ canceled: true }); }
       if (code === 0) { try { fs.renameSync(tmp, file); } catch (_) {} }
-      else { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {} }
+      else dropTmp();
       resolve({ ok: code === 0 });
     });
   });
@@ -1598,24 +2211,28 @@ function tagAudioFile(file, { url, genre, info }) {
 //   "measure"  — pass 1 could not measure the loudness;
 //   "apply"    — pass 2 failed, or produced no audio;
 //   "replace"  — pass 2 worked but the normalized file could not replace the original.
-async function loudnormTwoPass(file, I = -14, bitrate = null) {
-  if (cancelRequested) return { ok: false, reason: "canceled" };
+function loudnormMeasure(file, I, job = "single") {
   const ffmpeg = path.join(BIN_DIR, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
-  // Pass 1: measure
-  const meas = await new Promise((res) => {
+  return new Promise((res) => {
     let err = "";
     const c = trackChild(spawn(ffmpeg, ["-i", file, "-af",
       `loudnorm=I=${I}:TP=-1.5:LRA=11:print_format=json`, "-f", "null", "-"],
-      { windowsHide: true }));
-    c.stderr.on("data", d => err += d);
-    c.on("error", () => { untrackChild(c); res(null); });
+      { windowsHide: true }), job);
+    c.stderr.on("data", (d) => { err += d; });
+    c.on("error", () => { res(null); });
     c.on("close", () => {
-      untrackChild(c);
       const m = err.match(/\{[\s\S]*\}/);
       try { res(m ? JSON.parse(m[0]) : null); } catch (_) { res(null); }
     });
   });
-  if (cancelRequested) return { ok: false, reason: "canceled" };
+}
+
+async function loudnormTwoPass(file, I = -14, bitrate = null, job = "single") {
+  if (jobCanceled(job)) return { ok: false, reason: "canceled" };
+  const ffmpeg = path.join(BIN_DIR, process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg");
+  // Pass 1: measure
+  const meas = await loudnormMeasure(file, I, job);
+  if (jobCanceled(job)) return { ok: false, reason: "canceled" };
   if (!meas) return { ok: false, reason: "measure" };
   // Pass 2: apply
   const tmp = file + ".ln" + path.extname(file);
@@ -1633,32 +2250,98 @@ async function loudnormTwoPass(file, I = -14, bitrate = null) {
   else if (ext === ".opus") enc.push("-c:a", "libopus",    "-b:a", `${kbps || 192}k`);
   return new Promise((res) => {
     const c = trackChild(spawn(ffmpeg, ["-y", "-i", file, "-map", "0:a", "-map_metadata", "0",
-      "-af", af, ...enc, tmp], { windowsHide: true }));
+      "-af", af, ...enc, tmp], { windowsHide: true }), job);
     const dropTmp = () => { try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {} };
-    c.on("error", () => { untrackChild(c); dropTmp(); res({ ok: false, reason: cancelRequested ? "canceled" : "apply" }); });
+    c.on("error", () => { dropTmp(); res({ ok: false, reason: jobCanceled(job) ? "canceled" : "apply" }); });
     c.on("close", (code) => {
-      untrackChild(c);
       if (code !== 0) {
         dropTmp();
-        return res({ ok: false, reason: cancelRequested ? "canceled" : "apply" });
+        return res({ ok: false, reason: jobCanceled(job) ? "canceled" : "apply" });
       }
       // Cancel arrived but ffmpeg still exited 0 (it finished, or the signal came too late): the user asked to
       // stop, so the finished temp file is DISCARDED and the original stays. The result ("canceled") and the
       // file on disk then agree: this file is not normalized. (The swap below is synchronous, so a Cancel that
       // arrives later cannot land in the middle of it: it is either seen here, or after the file is done.)
-      if (cancelRequested) { dropTmp(); return res({ ok: false, reason: "canceled" }); }
+      if (jobCanceled(job)) { dropTmp(); return res({ ok: false, reason: "canceled" }); }
       // ffmpeg said success: only count it if there is real output, and only after the swap works.
       let size = 0;
       try { size = fs.statSync(tmp).size; } catch (_) {}
       if (!(size > 0)) { dropTmp(); return res({ ok: false, reason: "apply" }); }
-      try { fs.renameSync(tmp, file); }
-      catch (e) { dropTmp(); return res({ ok: false, reason: "replace", error: (e && (e.code || e.message)) || "rename failed" }); }
-      res({ ok: true });
+      loudnormMeasure(tmp, I, job).then((measOut) => {
+        if (jobCanceled(job)) { dropTmp(); return res({ ok: false, reason: "canceled" }); }
+        if (!measOut) { dropTmp(); return res({ ok: false, reason: "apply" }); }
+        const outputI = Number(measOut.input_i);
+        const outputTp = Number(measOut.input_tp);
+        if (!Number.isFinite(outputI) || !Number.isFinite(outputTp)) {
+          dropTmp();
+          return res({ ok: false, reason: "apply" });
+        }
+        if (outputTp > -1.0) {
+          dropTmp();
+          return res({ ok: false, reason: "true_peak", outputI, outputTp });
+        }
+        try { fs.renameSync(tmp, file); }
+        catch (e) { dropTmp(); return res({ ok: false, reason: "replace", error: (e && (e.code || e.message)) || "rename failed" }); }
+        if (Math.abs(outputI - I) > 1.0) {
+          return res({ ok: true, miss: true, reason: "target_miss", outputI, outputTp });
+        }
+        res({ ok: true });
+      }).catch(() => { dropTmp(); res({ ok: false, reason: "apply" }); });
     });
   });
 }
 
-ipcMain.handle("download", async (_e, opts) => {
+function codecFamily(acodec) {
+  const c = String(acodec || "").toLowerCase();
+  if (!c || c === "none") return "";
+  if (c.includes("mp3")) return "mp3";
+  if (c.includes("aac") || c === "mp4a" || c === "m4a") return "aac";
+  if (c.includes("pcm") || c === "wav") return "pcm";
+  if (c.includes("flac")) return "flac";
+  return c;
+}
+function formatFamily(fmt) {
+  if (fmt === "mp3") return "mp3";
+  if (fmt === "m4a") return "aac";
+  if (fmt === "wav") return "pcm";
+  if (fmt === "flac") return "flac";
+  return String(fmt || "");
+}
+function sourceFromProbe(p) {
+  if (!p) return { sourceAcodec: null, sourceAbr: null };
+  if (p.sourceAcodec != null || p.sourceAbr != null) {
+    return { sourceAcodec: p.sourceAcodec || null, sourceAbr: p.sourceAbr || null };
+  }
+  const fmts = Array.isArray(p.formats) ? p.formats : [];
+  const audio = fmts.filter((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"));
+  const best = audio.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0] || {};
+  return { sourceAcodec: best.acodec || null, sourceAbr: best.abr || null };
+}
+function planEncode({ audioFormat, bitrate, loudnorm, sourceAcodec, sourceAbr }) {
+  const targetFormat = audioFormat;
+  const targetBitrate = parseInt(bitrate, 10) || 0;
+  const srcFam = codecFamily(sourceAcodec);
+  const tgtFam = formatFamily(audioFormat);
+  const lossless = audioFormat === "wav" || audioFormat === "flac";
+  const abrKnown = sourceAbr != null && Number(sourceAbr) > 0;
+  const abr = abrKnown ? Number(sourceAbr) : 0;
+  let mode = "convert";
+  if (!loudnorm && srcFam && srcFam === tgtFam) {
+    // Unknown bitrate: do not claim convert-to-target. Matching codec + Normalize off → preserve source.
+    if (lossless || !abrKnown || abr >= targetBitrate) mode = "copy";
+  }
+  const upsampleWarn = mode === "convert" && !loudnorm && !!srcFam && srcFam === tgtFam && !lossless && abrKnown && abr < targetBitrate;
+  return {
+    mode,
+    upsampleWarn,
+    sourceAcodec: sourceAcodec || null,
+    sourceAbr: abrKnown ? sourceAbr : null,
+    targetFormat,
+    targetBitrate,
+  };
+}
+
+async function handleDownload(opts, job = "single") {
   // Validate the link first: nothing below (binary setup, folder creation,
   // probe, process launch) runs for an invalid one.
   const urlCheck = checkYtdlpUrl(opts && opts.url);
@@ -1666,7 +2349,8 @@ ipcMain.handle("download", async (_e, opts) => {
   const url = urlCheck.url;
   // Authorize the destination before anything is set up or created.
   const dest = resolveDestination(opts && opts.targetPath, opts && opts.folder);
-  if (!dest.ok) return { ok: false, error: dest.error };
+  if (!dest.ok) return { ok: false, error: dest.error, ...(dest.errorCode ? { errorCode: dest.errorCode } : {}) };
+  if (opts && opts.targetPath && missingMountChain(dest.dir)) return DEST_UNMOUNTED;
   await ensureBinaries();
   const { type = "audio", audioFormat = DEFAULTS.audioFormat, bitrate = DEFAULTS.audioBitrate,
           quality = "best", noConvert = false, folder = "", force = false,
@@ -1674,11 +2358,16 @@ ipcMain.handle("download", async (_e, opts) => {
           _info, _inQueue = false, _queueId } = opts || {};
 
   // Fresh start: a cancel from the previous item must not kill this one.
-  cancelRequested = false;
+  jobOf(job).cancelRequested = false;
 
   const isPlaylist = type === "playlist";
   const outDir = dest.dir;
-  fs.mkdirSync(outDir, { recursive: true });
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+  } catch (e) {
+    if (opts && opts.targetPath && (e.code === "EACCES" || e.code === "EPERM")) return DEST_UNMOUNTED;
+    throw e;
+  }
 
   // Fetch info once; reuse for dup-check and tagging (skip for playlists / forced re-downloads).
   let probeResult = _info || null;
@@ -1687,7 +2376,10 @@ ipcMain.handle("download", async (_e, opts) => {
     const preventDup = cfgFlag(cfg, "prevent_duplicates");
     if (preventDup || autoTag !== false) {
       if (!probeResult) {
-        try { probeResult = await probeInfo(url); } catch (_) {}
+        try { probeResult = await probeInfo(url, job); }
+        catch (e) {
+          if (e && e.canceled) { cleanPartials(outDir); return { ok: false, canceled: true }; }
+        }
       }
     }
 
@@ -1725,8 +2417,21 @@ ipcMain.handle("download", async (_e, opts) => {
   }
 
   const wantAudio = type === "audio" || (isPlaylist && opts.audioOnly);
+  if (wantAudio && !isPlaylist && !probeResult) {
+    try { probeResult = await probeInfo(url, job); }
+    catch (e) {
+      if (e && e.canceled) { cleanPartials(outDir); return { ok: false, canceled: true }; }
+    }
+  }
+  const doLoudnorm = wantAudio && (wantLoudnorm !== undefined ? wantLoudnorm : cfgFlag(loadConfig(), "loudnorm"));
+  const src = sourceFromProbe(probeResult);
+  const encodePlan = wantAudio ? planEncode({
+    audioFormat, bitrate, loudnorm: !!doLoudnorm,
+    sourceAcodec: src.sourceAcodec, sourceAbr: src.sourceAbr,
+  }) : null;
   if (wantAudio) {
-    args.push("-x", "--audio-format", audioFormat, "--audio-quality", `${bitrate}K`);
+    args.push("-x", "--audio-format", audioFormat);
+    if (!encodePlan || encodePlan.mode === "convert") args.push("--audio-quality", `${bitrate}K`);
     // Feature 2: loudnorm is NOT passed to yt-dlp as `--postprocessor-args ffmpeg:-af …`.
     // That flag hits every ffmpeg postprocessor, and when the source stream already
     // matches the target format (SoundCloud MP3 sources, most notably) yt-dlp's
@@ -1755,7 +2460,7 @@ ipcMain.handle("download", async (_e, opts) => {
   const onProgress = (p) => { if (mainWindow) mainWindow.webContents.send("download-progress", p); };
   const plTotal = isPlaylist && Array.isArray(opts.playlistItems) ? opts.playlistItems.length : 0;
   try {
-    const files = await runYtdlp(args, onProgress, plTotal);
+    const files = await runYtdlp(args, onProgress, plTotal, false, false, job);
 
     // Feature 2: two-pass loudnorm for ALL audio formats — must run before tagging.
     // Lossy targets are re-encoded at the user's chosen bitrate inside the helper.
@@ -1776,12 +2481,16 @@ ipcMain.handle("download", async (_e, opts) => {
           const normalizedOk = [];   // files whose normalized audio really replaced the original
           for (const f of targets) {
             let r;
-            try { r = await loudnormTwoPass(f, lufsTarget2, bitrate); }
+            try { r = await loudnormTwoPass(f, lufsTarget2, bitrate, job); }
             catch (_) { r = { ok: false, reason: "error" }; }
-            if (r && r.ok === true) { normalizedOk.push(f); continue; }
+            if (r && r.ok === true) {
+              normalizedOk.push(f);
+              if (r.miss) failed.push({ file: f, reason: r.reason || "target_miss", outputI: r.outputI, outputTp: r.outputTp });
+              continue;
+            }
             const reason = (r && r.reason) || "apply";
             // Cancel pressed while normalizing: stop here, don't count it as a failure.
-            if (reason === "canceled" || cancelRequested) {
+            if (reason === "canceled" || jobCanceled(job)) {
               // Same result as a cancelled download. Finished files are NOT deleted (cleanPartials never touches
               // them) and the per-file state is reported as it really is: files normalized BEFORE the cancel stay
               // normalized (normalizedFiles); the rest are exactly as downloaded audio-wise (notNormalizedFiles).
@@ -1801,20 +2510,38 @@ ipcMain.handle("download", async (_e, opts) => {
     }
 
     // Feature 1: auto-tag (after loudnorm to preserve tags)
+    let tagWarning = null;
     if (wantAudio && files.length) {
       const cfgTag = loadConfig();
       const doTag = autoTag !== undefined ? autoTag : cfgFlag(cfgTag, "auto_tag");
       if (doTag) {
         const genre = folder || path.basename(outDir);
+        let tagFailed = 0, tagTotal = 0;
         for (const f of files) {
-          try { await tagAudioFile(f, { url, genre, info: probeResult }); } catch (_) {}
+          let tr;
+          try { tr = await tagAudioFile(f, { url, genre, info: probeResult }, job); }
+          catch (_) { tr = { error: true }; }
+          if (tr && tr.canceled) {
+            cleanPartials(outDir);
+            return { ok: false, canceled: true, keptFiles: files.slice() };
+          }
+          if (tr && tr.skipped) continue;
+          tagTotal++;
+          if (!tr || tr.ok === false || tr.error) tagFailed++;
         }
+        if (tagFailed) tagWarning = { failed: tagFailed, total: tagTotal };
       }
     }
 
     files.forEach(f => recordHistory({
       action: type, url, title: path.basename(f), folder: path.dirname(f), file: f,
-      details: wantAudio ? `${audioFormat} ${bitrate}kbps` : (noConvert ? "original" : `quality=${quality}`),
+      details: wantAudio
+        ? (encodePlan && encodePlan.mode === "copy"
+            ? (encodePlan.sourceAbr != null
+                ? `${audioFormat} source ~${Math.round(Number(encodePlan.sourceAbr))} kbps preserved`
+                : `${audioFormat} source preserved`)
+            : `${audioFormat} ${bitrate}kbps`)
+        : (noConvert ? "original" : `quality=${quality}`),
     }));
 
     // Record id→file for dedup (single downloads only — playlists skip dup-check).
@@ -1858,14 +2585,16 @@ ipcMain.handle("download", async (_e, opts) => {
       }
     }
 
-    return { ok: true, count: files.length, files, folder: outDir, ...(normalizeWarning ? { normalizeWarning } : {}) };
+    return { ok: true, count: files.length, files, folder: outDir, ...(encodePlan ? { encodePlan } : {}), ...(normalizeWarning ? { normalizeWarning } : {}), ...(tagWarning ? { tagWarning } : {}) };
   } catch (e) {
     if (e && e.canceled) {
       cleanPartials(outDir);
       return { ok: false, canceled: true };
     }
-    return { ok: false, error: e.message, needsCookies: isCookieError(e.message) };
+    const info = errorInfo(e.message, { retryKind: e.retryKind });
+    return { ok: false, error: e.message, errorCode: info.code, needsCookies: info.needsCookies, retryKind: info.retryKind };
   } finally {
-    cancelRequested = false;
+    jobOf(job).cancelRequested = false;
   }
-});
+}
+ipcMain.handle("download", (_e, opts) => handleDownload(opts));

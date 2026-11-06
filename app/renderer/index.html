@@ -425,8 +425,15 @@
     white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;max-width:320px;
     font-family:ui-monospace,Menlo,monospace}
   .q-note{color:#f5a623;font-size:11px;display:block;margin-top:4px;line-height:1.4;white-space:normal;word-break:break-word;max-width:320px}
-  .q-sel{width:100%;padding:6px 8px;font-size:13px;border-radius:8px;min-height:0}
-  .q-remove{min-height:30px;padding:0 10px;font-size:12px}
+  .q-sel{width:100%;padding:6px 8px;font-size:13px;border-radius:8px;min-height:44px}
+  .q-act,.q-remove{min-height:44px;padding:0 12px;font-size:13px}
+  .q-preview{font-size:13px;color:var(--muted);margin:8px 0 0;min-height:1.3em}
+  .q-hint{font-size:12px;color:var(--muted);margin:8px 0 0;max-width:52em;line-height:1.45}
+  .q-section{margin-top:22px}
+  .q-section h3{font-size:15px;margin:0 0 6px}
+  .q-loc{font-size:13px;color:var(--text)}
+  .q-fmt{font-size:12px;color:var(--muted)}
+  .q-actions{display:flex;flex-wrap:wrap;gap:8px}
 
   /* status badge dots */
   .q-fpdup{color:#9b6bff;font-size:11px;display:block;margin-top:4px;line-height:1.4;white-space:normal;word-break:break-word;max-width:320px}
@@ -435,7 +442,7 @@
   .q-st-done::before{content:"✓";color:var(--ok)}
   .q-st-error::before{content:"✕";color:#ff6b6b}
   .q-st-skipped::before{content:"⊘";color:#f5a623}
-  .q-st-flagged::before{content:"⚑";color:#9b6bff}
+  .q-st-canceled::before{content:"–";color:#8a8a96}
 
   /* queue all-to-one row */
   .q-all-row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
@@ -723,39 +730,58 @@
           <button id="queueRunBtn" data-i18n="queue_run">▶ Ejecutar cola</button>
           <button id="queuePauseBtn" class="sec" style="display:none" data-i18n="queue_pause">⏸ Pausar</button>
           <button id="queueRetryBtn" class="sec" style="display:none" data-i18n="queue_retry_failed">↻ Reintentar fallidos</button>
-          <button id="queueClearBtn" class="sec" data-i18n="queue_clear">Limpiar</button>
+          <button id="queueClearFinishedBtn" class="sec" data-i18n="queue_clear_finished">Quitar completados de la lista</button>
+          <button id="queueRemoveErrorsBtn" class="sec" data-i18n="queue_remove_errors">Quitar errores de la lista</button>
         </div>
       </div>
 
-      <!-- Paste area -->
       <label for="queueInput" data-i18n="queue_paste_label">Pega uno o varios enlaces (uno por línea)</label>
       <div class="q-add-row">
         <textarea id="queueInput" rows="3" data-i18n-placeholder="queue_input_ph" placeholder="https://…"></textarea>
         <button id="queueAddBtn" class="sec" data-i18n="queue_add">Añadir a la cola</button>
       </div>
+      <p id="queueAddPreview" class="q-preview" aria-live="polite"></p>
+      <p id="queueMsg" class="q-preview" role="status" aria-live="polite"></p>
 
-      <!-- All-to-one folder control -->
       <div class="q-all-row">
         <label for="queueAllFolder" data-i18n="queue_all_to">Todos a →</label>
         <select id="queueAllFolder"></select>
-        <button id="queueApplyAll" class="sec" data-i18n="queue_apply_all">Aplicar a todos</button>
+        <button id="queueApplyAll" class="sec" data-i18n="queue_apply_pending">Aplicar a pendientes</button>
       </div>
 
-      <!-- Queue table -->
-      <table class="q-table" id="queueTable">
-        <thead>
-          <tr>
-            <th data-i18n="queue_th_status">Estado</th>
-            <th data-i18n="queue_th_url">Enlace / Título</th>
-            <th data-i18n="queue_th_folder">Carpeta</th>
-            <th data-i18n="queue_th_format">Formato</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="queueRows"></tbody>
-      </table>
+      <section class="q-section" id="queueActive" aria-labelledby="queue-active-h">
+        <h3 id="queue-active-h" data-i18n="queue_active_h">En espera y con error</h3>
+        <p id="queueActiveHint" class="q-hint" data-i18n="queue_active_hint">Estas opciones se usan cuando se descarga el elemento. No mueven ni convierten un archivo que ya está descargado.</p>
+        <table class="q-table" id="queueActiveTable">
+          <thead>
+            <tr>
+              <th data-i18n="queue_th_status">Estado</th>
+              <th data-i18n="queue_th_url">Enlace / Título</th>
+              <th data-i18n="queue_save_to">Guardar en</th>
+              <th data-i18n="queue_download_as">Descargar como</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="queueActiveRows"></tbody>
+        </table>
+      </section>
 
-      <!-- Summary -->
+      <section class="q-section" id="queueCompleted" aria-labelledby="queue-completed-h">
+        <h3 id="queue-completed-h" data-i18n="queue_completed_h">Archivos completados</h3>
+        <table class="q-table" id="queueCompletedTable">
+          <thead>
+            <tr>
+              <th data-i18n="queue_th_status">Estado</th>
+              <th data-i18n="queue_th_url">Enlace / Título</th>
+              <th data-i18n="queue_th_location">Ubicación</th>
+              <th data-i18n="queue_th_format">Formato</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="queueCompletedRows"></tbody>
+        </table>
+      </section>
+
       <div id="queueSummary"></div>
     </div>
   </section>

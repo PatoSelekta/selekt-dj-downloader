@@ -43,14 +43,23 @@ function makeHarness({ config = {}, seedBinaries = true, withWindow = false, htt
     }
     return { code: 0 };
   };
+  const hangers = [];
   const fakeChild = (res) => {
     const c = new EventEmitter();
-    c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); c.kill = () => {};
-    setImmediate(() => {
+    c.stdout = new EventEmitter(); c.stderr = new EventEmitter();
+    c.kill = () => { process.nextTick(() => c.emit("close", res.killedCode === undefined ? 1 : res.killedCode)); };
+    const finish = () => {
       if (res.stdout) c.stdout.emit("data", Buffer.from(res.stdout));
       if (res.stderr) c.stderr.emit("data", Buffer.from(res.stderr));
       c.emit("close", res.code === undefined ? 0 : res.code);
-    });
+    };
+    if (res.hang) {
+      hangers.push({ c, finish, res });
+      if (res.stdout) process.nextTick(() => c.stdout.emit("data", Buffer.from(res.stdout)));
+      if (res.stderr) process.nextTick(() => c.stderr.emit("data", Buffer.from(res.stderr)));
+      return c;
+    }
+    setImmediate(finish);
     return c;
   };
   const blocked = (n) => () => { net.push(n); throw new Error("network blocked in test"); };
@@ -112,6 +121,13 @@ function makeHarness({ config = {}, seedBinaries = true, withWindow = false, htt
     },
     queueDialog: (...paths) => state.dialogPaths.push(...paths),
     invoke: (ch, ...a) => handlers.get(ch)({}, ...a),
+    pendingHangs: () => hangers.length,
+    releaseHang: (code = 0) => {
+      const hng = hangers.shift();
+      if (!hng) return false;
+      process.nextTick(() => hng.c.emit("close", code));
+      return true;
+    },
     ytdlpCalls: () => spawns.filter(s => s.cmd.includes("yt-dlp") && !s.args.includes("--version")),
     // Listing of every entry (type + symlink target + file bytes) under userData, excluding the
     // app's own config/bin files, so "no filesystem mutation" is a plain deepEqual.
@@ -143,32 +159,23 @@ async function withHarness(opts, fn) {
 }
 
 // The destId -> options conversion is the REAL shared module the renderer loads
-// (renderer/destination.js). toOpts / the queue loop still mirror renderer.js
-// toDownloadOpts and runQueue (the renderer itself is not executed here).
+// (renderer/destination.js). runQueueLikeRenderer starts the production main
+// queue runner (queue-start) and waits for it to drain.
 const SelektDest = require("../renderer/destination.js");
 const queueItemDest = (item) => SelektDest.queueItemDest(item);
-const INVALID_DEST_TEXT = "Invalid destination for this download. Choose the folder again.";   // = renderer t("dest_bad") (en)
+const INVALID_DEST_TEXT = "This app can't use that location. Choose the folder again.";   // = renderer t("dest_bad") (en)
 const toOpts = (item) => ({
   url: item.url, type: item.playlist ? "playlist" : "video", quality: "best", autoTag: false, _inQueue: true,
   ...(item.playlistItems ? { playlistItems: item.playlistItems } : {}),
   ...queueItemDest(item),
 });
 async function runQueueLikeRenderer(h) {
-  for (let guard = 0; guard < 50; guard++) {
-    const q = await h.invoke("queue-get");
-    const item = q.find(i => i.status === "pending");
-    if (!item) return;
-    await h.invoke("queue-update-item", { id: item.id, status: "running" });
-    const opts = toOpts(item);
-    let r;
-    if (opts.destInvalid) r = { ok: false, error: INVALID_DEST_TEXT };   // renderer: nothing is sent to main
-    else { try { r = await h.invoke("download", opts); } catch (e) { r = { ok: false, error: String(e) }; } }
-    let status = "error", error = null;
-    if (r.ok) status = "done";
-    else if (r.canceled) status = "canceled";
-    else if (r.duplicate || r.skipped) status = "skipped";
-    else error = r.error || "download failed";
-    await h.invoke("queue-update-item", { id: item.id, status, error });
+  await h.invoke("queue-start");
+  const end = Date.now() + 8000;
+  while (Date.now() < end) {
+    const st = await h.invoke("queue-status");
+    if (!st.running) return;
+    await new Promise((r) => setTimeout(r, 15));
   }
   assert.fail("queue did not drain");
 }

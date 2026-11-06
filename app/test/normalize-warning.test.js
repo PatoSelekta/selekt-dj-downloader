@@ -22,13 +22,19 @@ const MEASURE = '{"input_i":"-20","input_tp":"-3","input_lra":"5","input_thresh"
 //   pass 2 (has -af ...measured_I) -> writes the temp output ("NORMALIZED"), or fails in the requested way
 //   tag    (has -metadata)         -> writes input + "+TAG" to its output
 // pass2 may be a string or a function(inputFile) -> string. Calls are logged in `log`.
+const GATE_OK = '{"input_i":"-14.0","input_tp":"-10","input_lra":"5","input_thresh":"-30","target_offset":"0"}';
 function makeScript(log, { names = ["Artist - Song.mp3"], pass1 = "ok", pass2 = "ok", onPass1, onPass2 } = {}) {
   return (cmd, args) => {
     if (cmd.endsWith("ffmpeg")) {
       const out = args[args.length - 1];
       if (args.includes("null")) {
+        const input = args[args.indexOf("-i") + 1];
+        if (/\.ln\./.test(String(input))) {
+          log.push("gate");
+          return { code: 0, stderr: GATE_OK };
+        }
         log.push("pass1");
-        if (onPass1) onPass1(args[args.indexOf("-i") + 1]);
+        if (onPass1) onPass1(input);
         if (pass1 === "throw") throw new Error("spawn EACCES");
         if (pass1 === "nojson") return { code: 1, stderr: "Invalid data found when processing input" };
         return { code: 0, stderr: MEASURE };
@@ -81,7 +87,7 @@ test("success: the normalized audio replaces the file, then it is tagged; no war
   const r = await download();
   assert.equal(r.ok, true);
   assert.equal("normalizeWarning" in r, false, "a clean success carries no warning");
-  assert.deepEqual(log, ["pass1", "pass2", "tag"], "measure, apply, then tag");
+  assert.deepEqual(log, ["pass1", "pass2", "gate", "tag"], "measure, apply, gate, then tag");
   assert.equal(read(), "NORMALIZED+TAG");
   assert.deepEqual(leftovers(), []);
   assert.equal(lines("download_history.jsonl").length, 1);
@@ -129,7 +135,7 @@ test("file replacement fails: not reported as normalized, original left exactly 
   assert.deepEqual(r.normalizeWarning, { total: 1, failed: [{ file: r.files[0], reason: "replace" }] });
   assert.equal(read(), "ORIGINAL", "the original audio was not touched");
   assert.deepEqual(leftovers(), [], "the normalized temp file was removed");
-  assert.deepEqual(log, ["pass1", "pass2"]);
+  assert.deepEqual(log, ["pass1", "pass2", "gate"]);
 }));
 
 test("several files: one failing track is named in the warning, the others stay normalized", T, () => run({
@@ -240,7 +246,7 @@ test("cancel after file 1 of 2 was normalized, while file 2 is being applied: fi
     assert.equal(ctx.read("A.mp3"), "NORMALIZED", "file 1 really is the normalized audio (not tagged: a cancelled item is not tagged)");
     assert.equal(ctx.read("B.mp3"), "ORIGINAL", "file 2 is untouched");
     assert.deepEqual(ctx.leftovers(), []);
-    assert.deepEqual(ctx.log, ["pass1", "pass2", "pass1", "pass2"], "no tagging");
+    assert.deepEqual(ctx.log, ["pass1", "pass2", "gate", "pass1", "pass2"], "no tagging");
     assert.equal(ctx.lines("download_history.jsonl").length, 0, "cancelled items add no History row (unchanged behavior)");
     assert.equal(ctx.lines("downloaded_index.jsonl").length, 0, "and no duplicate record");
     const tx = texts(r);
@@ -259,7 +265,7 @@ test("cancel after file 1 of 2 was normalized, while file 2 is still being measu
     assert.deepEqual(r.notNormalizedFiles.map(f => path.basename(f)), ["B.mp3"]);
     assert.equal(ctx.read("A.mp3"), "NORMALIZED");
     assert.equal(ctx.read("B.mp3"), "ORIGINAL");
-    assert.deepEqual(ctx.log, ["pass1", "pass2", "pass1"], "file 2's pass 2 never starts");
+    assert.deepEqual(ctx.log, ["pass1", "pass2", "gate", "pass1"], "file 2's pass 2 never starts");
     assert.deepEqual(texts(r), { en: EN_PARTIAL_1_OF_2, es: ES_PARTIAL_1_OF_2 });
   });
 });
@@ -332,7 +338,7 @@ function canceledNoteIn(lang) {
 }
 
 test("renderer texts: every warning string exists in Spanish and English, and the sentence names count, total and reason", T, () => {
-  for (const k of ["norm_warn", "norm_warn_in", "norm_reason_measure", "norm_reason_apply", "norm_reason_replace", "norm_reason_error", "q_canceled_kept", "q_canceled_partial", "q_canceled_all"]) {
+  for (const k of ["norm_warn", "norm_warn_in", "norm_reason_measure", "norm_reason_apply", "norm_reason_replace", "norm_reason_error", "norm_reason_true_peak", "norm_reason_target_miss", "norm_miss", "tag_warn", "q_canceled_kept", "q_canceled_partial", "q_canceled_all"]) {
     for (const lang of ["es", "en"]) assert.ok(I18N[lang][k] && I18N[lang][k].length > 10, `${lang}.${k}`);
   }
   const en = normWarnTextIn("en"), es = normWarnTextIn("es");
@@ -358,12 +364,13 @@ test("renderer canceledNote: none / some / all normalized, no kept file, and an 
 
 test("renderer contract (source guard): a warning keeps the row 'done' with the warning as its note; cancel with kept files has its own note; the message uses the warn style", T, () => {
   const html = fs.readFileSync(path.join(APP, "renderer", "index.html"), "utf8");
+  const MAIN = fs.readFileSync(path.join(APP, "main.js"), "utf8");
   assert.match(html, /#msg\.warn\{color:#f5a623\}/);
-  assert.match(RENDERER, /const normWarn = r\.ok \? normWarnText\(r\.normalizeWarning\) : "";/);
-  assert.match(RENDERER, /status = "done";[^\n]*\n[^\n]*\n\s*if \(normWarn\) note = normWarn;/);
-  assert.match(RENDERER, /note = canceledNote\(r\) \|\| t\("q_canceled"\);/);
-  assert.match(RENDERER, /msg\.textContent = canceledNote\(r\) \|\| t\("canceled_msg"\);/);
-  assert.match(RENDERER, /status === "done" && normWarn\) \{\s*msg\.className = "warn";/);
+  assert.match(MAIN, /status = "done";/);
+  assert.match(MAIN, /bits\.push\("normalization warning"\)/);
+  assert.match(RENDERER, /canceledNote\(item\) \|\| item\.note \|\| t\("q_canceled"\)/);
+  assert.match(RENDERER, /msg\.textContent = canceledNote\(item\) \|\| t\("canceled_msg"\);/);
+  assert.match(RENDERER, /item\.status === "done" && normWarn\) \{\s*msg\.className = "warn";/);
   assert.match(RENDERER, /msg\.className = "warn";\s*msg\.textContent = warn \+ " "/);   // the single-download path (runDownload)
 });
 

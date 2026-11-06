@@ -301,13 +301,13 @@ test("delete-file rejects: file replaced by a symlink, file gone, and new file w
 // --- structure guards ---------------------------------------------------------------------
 test("source guard (main.js): every shell sink is behind the H1 checks; trash is awaited", () => {
   const sinks = MAIN_SRC.match(/shell\.(openPath|showItemInFolder|trashItem)\(/g) || [];
-  assert.equal(sinks.length, 4, "openWithShell, reveal, delete-file and the argument-free open-main-folder");
+  assert.equal(sinks.length, 5, "openWithShell, reveal, delete-file, open-main-folder, and queue-reveal-output");
   assert.match(MAIN_SRC, /await shell\.trashItem\(chk\.real\)/);
   assert.match(MAIN_SRC, /await shell\.openPath\(target\)/);
   assert.match(MAIN_SRC, /shell\.showItemInFolder\(chk\.real\)/);
   assert.match(MAIN_SRC, /ipcMain\.handle\("open-main-folder", \(\) => \{ const b = mainFolder\(\); if \(fs\.existsSync\(b\)\) shell\.openPath\(b\); return true; \}\);/, "open-main-folder takes no renderer path and is unchanged");
   assert.ok(!/shell\.\w+\((p|filePath|folderPath)\)/.test(MAIN_SRC), "no shell call receives a raw renderer argument");
-  for (const ch of ["open-file", "reveal", "delete-file", "open-favorite"]) {
+  for (const ch of ["open-file", "reveal", "delete-file", "open-favorite", "queue-reveal-output"]) {
     const i = MAIN_SRC.indexOf(`ipcMain.handle("${ch}"`);
     assert.ok(i > 0, ch);
     assert.match(MAIN_SRC.slice(i, i + 1200), /checkManagedFile|resolveFavorite/, `${ch} validates first`);
