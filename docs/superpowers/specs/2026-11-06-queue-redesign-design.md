@@ -1,6 +1,6 @@
 # Selekt DJ Downloader — Queue redesign
 
-**Status:** **Q1 + Q2 implemented** on `cursor/staged-upgrade-design-a99c` (layout + file-location checks). **Q3 Move** and **Q4 Convert / Add local files** remain **proposed** — no production buttons or IPC for those. No merge, install, release, or deploy from this document.
+**Status:** **Q1 + Q2 implemented** on `3654c47`. **Locate-outside-roots follow-up** is investigation-only: `docs/superpowers/specs/2026-11-06-queue-locate-relink-design.md` (not approved to code). **Q3 Move** and **Q4 Convert / Add local files** remain **proposed**. No merge, install, release, or deploy from this document.
 
 **Priority:** this redesign is the next product slice. It is **not** generic Phase 2 (presets / filename preview) from the 2026-11-05 staged-upgrade spec. Those later phases stay listed; they are not started.
 
